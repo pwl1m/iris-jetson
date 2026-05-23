@@ -1,0 +1,41 @@
+name: Deploy Jetson Staging
+
+on:
+  push:
+    branches:
+      - deploy/staging
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Copy repository to Jetson
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.JETSON_HOST }}
+          username: ${{ secrets.JETSON_USER }}
+          key: ${{ secrets.JETSON_SSH_KEY }}
+          port: ${{ secrets.JETSON_PORT || '22' }}
+          source: ".github,AGENTS.md,README.md,.env.example,.gitignore,compose,frigate,go2rtc,mosquitto,scripts,vision-app"
+          target: ${{ secrets.JETSON_DEPLOY_PATH || '/opt/jetson-orin-deploy' }}
+
+      - name: Deploy on Jetson
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          JETSON_DEPLOY_PATH: ${{ secrets.JETSON_DEPLOY_PATH || '/opt/jetson-orin-deploy' }}
+          JETSON_HEALTH_URL: ${{ secrets.JETSON_HEALTH_URL || 'http://localhost:8081/health' }}
+        with:
+          host: ${{ secrets.JETSON_HOST }}
+          username: ${{ secrets.JETSON_USER }}
+          key: ${{ secrets.JETSON_SSH_KEY }}
+          port: ${{ secrets.JETSON_PORT || '22' }}
+          envs: JETSON_DEPLOY_PATH,JETSON_HEALTH_URL
+          script: |
+            set -e
+            chmod +x "${JETSON_DEPLOY_PATH}/scripts/remote_deploy.sh"
+            "${JETSON_DEPLOY_PATH}/scripts/remote_deploy.sh"

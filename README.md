@@ -28,6 +28,27 @@ cp .env.example .env
 ./scripts/compose_jetson_down.sh
 ```
 
+## Deploy Automatizado
+
+O repositorio pode publicar a branch `deploy/staging` no Jetson via GitHub Actions.
+
+Arquivos relevantes:
+
+- `.github/workflows/deploy-jetson-staging.yml`
+- `scripts/remote_deploy.sh`
+
+Segredos esperados no GitHub:
+
+- `JETSON_HOST`
+- `JETSON_USER`
+- `JETSON_SSH_KEY`
+
+Segredos opcionais:
+
+- `JETSON_PORT`
+- `JETSON_DEPLOY_PATH`
+- `JETSON_HEALTH_URL`
+
 ## Escopo
 
 - manter apenas o que for necessario para deploy e operacao no Jetson

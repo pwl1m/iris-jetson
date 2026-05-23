@@ -18,6 +18,7 @@ Esta pasta representa o futuro repositorio de deploy do Jetson Orin Nano. O foco
 - Manter scripts idempotentes sempre que possivel.
 - Validar camera, Docker, runtime NVIDIA e recursos do host antes de subir containers.
 - Nao commit credenciais reais. Use `.env.example` como contrato.
+- O deploy automatizado deve sair da branch `deploy/staging` deste repositorio.
 
 ## Mudancas De Modelo
 
