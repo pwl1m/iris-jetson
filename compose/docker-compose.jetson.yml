@@ -1,0 +1,85 @@
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2.0
+    container_name: vision-mosquitto
+    restart: unless-stopped
+    ports:
+      - "1883:1883"
+      - "9001:9001"
+    volumes:
+      - ../mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ../mosquitto/data:/mosquitto/data
+    networks:
+      - vision-lab
+
+  go2rtc:
+    image: alexxit/go2rtc:latest
+    container_name: vision-go2rtc
+    restart: unless-stopped
+    ports:
+      - "1984:1984"
+      - "8554:8554"
+      - "8555:8555"
+    env_file:
+      - ../.env
+    volumes:
+      - ../go2rtc/go2rtc.yaml:/config/go2rtc.yaml:ro
+    devices:
+      - "${USB_CAMERA_DEVICE:-/dev/video0}:${USB_CAMERA_DEVICE:-/dev/video0}"
+    networks:
+      - vision-lab
+
+  frigate:
+    image: ghcr.io/blakeblackshear/frigate:stable-tensorrt-jp6
+    container_name: vision-frigate
+    restart: unless-stopped
+    privileged: true
+    runtime: nvidia
+    shm_size: "512mb"
+    ports:
+      - "5000:5000"
+    env_file:
+      - ../.env
+    environment:
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,video,utility
+      YOLO_MODELS: yolov7-320
+      USE_FP16: "true"
+    volumes:
+      - ../frigate/config.jetson.yml:/config/config.yml
+      - ../frigate/models:/config/model_cache
+      - ../frigate/data:/media/frigate
+      - /etc/localtime:/etc/localtime:ro
+    depends_on:
+      - mosquitto
+      - go2rtc
+    networks:
+      - vision-lab
+
+  vision-app:
+    build:
+      context: ../vision-app
+      dockerfile: Dockerfile.jetson
+    container_name: vision-app
+    restart: unless-stopped
+    runtime: nvidia
+    ports:
+      - "8081:8080"
+    env_file:
+      - ../.env
+    environment:
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      FACE_PROVIDERS: CPUExecutionProvider
+    volumes:
+      - ../vision-app/data-faces:/data/faces
+      - ../vision-app/data-events:/data/events
+      - ../vision-app/models:/models/face
+      - ../vision-app/samples:/samples
+    networks:
+      - vision-lab
+
+networks:
+  vision-lab:
+    name: vision-lab
+    driver: bridge

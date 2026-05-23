@@ -1,0 +1,21 @@
+api:
+  listen: ":1984"
+
+streams:
+  usb_camera:
+    - "ffmpeg:device?video=${USB_CAMERA_INDEX:-0}&video_size=${USB_CAMERA_WIDTH:-1280}x${USB_CAMERA_HEIGHT:-720}&framerate=${USB_CAMERA_FPS:-50}#video=h264"
+
+rtsp:
+  listen: ":8554"
+
+webrtc:
+  listen: ":8555"
+  candidates:
+    - stun:stun.l.google.com:19302
+
+hls:
+  listen: ":8888"
+
+log:
+  level: info
+

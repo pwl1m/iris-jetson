@@ -1,0 +1,68 @@
+mqtt:
+  host: mosquitto
+  port: 1883
+  topic_prefix: frigate
+
+ffmpeg:
+  hwaccel_args: preset-nvidia
+
+go2rtc:
+  streams:
+    usb_camera: rtsp://go2rtc:8554/usb_camera
+
+cameras:
+  entrada:
+    ffmpeg:
+      inputs:
+        - path: rtsp://go2rtc:8554/usb_camera
+          input_args: preset-rtsp-restream
+          roles:
+            - detect
+            - record
+    detect:
+      width: 1280
+      height: 720
+      fps: 5
+      enabled: true
+    objects:
+      track:
+        - person
+      filters:
+        person:
+          threshold: 0.70
+          min_area: 5000
+    snapshots:
+      enabled: true
+      bounding_box: true
+      crop: true
+      retain:
+        default: 14
+    record:
+      enabled: true
+      alerts:
+        retain:
+          days: 3
+          mode: motion
+      detections:
+        retain:
+          days: 3
+          mode: motion
+
+detectors:
+  tensorrt:
+    type: tensorrt
+    device: 0
+
+model:
+  path: /config/model_cache/tensorrt/yolov7-320.trt
+  labelmap_path: /labelmap/coco-80.txt
+  input_tensor: nchw
+  input_pixel_format: rgb
+  width: 320
+  height: 320
+
+snapshots:
+  enabled: true
+  retain:
+    default: 14
+
