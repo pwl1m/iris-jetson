@@ -18,11 +18,47 @@ def cosine_similarity(left: np.ndarray, right: np.ndarray) -> float:
 
 
 class InsightFaceRecognizer:
-    def __init__(self, model_name: str, model_root: str, det_size: tuple[int, int], providers: list[str]):
+    def __init__(
+        self,
+        model_name: str,
+        model_root: str,
+        det_size: tuple[int, int],
+        providers: list[str],
+        ctx_id: int,
+    ):
         from insightface.app import FaceAnalysis
+        import onnxruntime as ort
 
+        self.requested_providers = list(providers)
+        self.available_providers = list(ort.get_available_providers())
         self.app = FaceAnalysis(name=model_name, root=model_root, providers=providers)
-        self.app.prepare(ctx_id=-1, det_size=det_size)
+        self.app.prepare(ctx_id=ctx_id, det_size=det_size)
+
+    def _model_sessions_providers(self) -> dict[str, list[str]]:
+        sessions: dict[str, list[str]] = {}
+        models = getattr(self.app, "models", {}) or {}
+        if isinstance(models, dict):
+            for model_name, model in models.items():
+                session = getattr(model, "session", None)
+                if session is None:
+                    continue
+                try:
+                    sessions[str(model_name)] = list(session.get_providers())
+                except Exception:
+                    sessions[str(model_name)] = []
+        return sessions
+
+    def provider_report(self) -> dict:
+        model_sessions = self._model_sessions_providers()
+        active = sorted({provider for values in model_sessions.values() for provider in values})
+        missing_requested = [item for item in self.requested_providers if item not in self.available_providers]
+        return {
+            "requested": self.requested_providers,
+            "available": self.available_providers,
+            "active": active,
+            "missing_requested": missing_requested,
+            "models": model_sessions,
+        }
 
     def extract_best(self, image: np.ndarray) -> tuple[np.ndarray, dict]:
         faces = self.app.get(image)
@@ -36,4 +72,3 @@ class InsightFaceRecognizer:
             "det_score": float(getattr(face, "det_score", 0.0)),
         }
         return embedding, metadata
-

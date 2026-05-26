@@ -6,4 +6,10 @@ source "${SCRIPT_DIR}/compose_lib.sh"
 
 COMPOSE="$(compose_cmd)"
 require_docker_access
-${COMPOSE} -f compose/docker-compose.jetson.yml --env-file .env up -d --build
+
+BUILD_FLAG=()
+if [[ "${1:-}" == "--build" ]]; then
+  BUILD_FLAG=(--build)
+fi
+
+${COMPOSE} -f compose/docker-compose.jetson.yml --env-file .env up -d --remove-orphans "${BUILD_FLAG[@]}"

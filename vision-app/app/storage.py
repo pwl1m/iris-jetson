@@ -53,9 +53,31 @@ class FaceStore:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def delete_subject(self, subject: str) -> int:
+        with self._connect() as conn:
+            cursor = conn.execute("DELETE FROM face_embeddings WHERE subject = ?", (subject,))
+            return int(cursor.rowcount)
+
+    def samples(self, subject: str) -> list[dict]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, subject, source, created_at
+                FROM face_embeddings
+                WHERE subject = ?
+                ORDER BY created_at DESC, id DESC
+                """,
+                (subject,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def delete_sample(self, sample_id: int) -> int:
+        with self._connect() as conn:
+            cursor = conn.execute("DELETE FROM face_embeddings WHERE id = ?", (sample_id,))
+            return int(cursor.rowcount)
+
     def embeddings(self) -> Iterable[tuple[str, np.ndarray, str | None]]:
         with self._connect() as conn:
             rows = conn.execute("SELECT subject, embedding, source FROM face_embeddings").fetchall()
         for row in rows:
             yield row["subject"], np.asarray(json.loads(row["embedding"]), dtype=np.float32), row["source"]
-

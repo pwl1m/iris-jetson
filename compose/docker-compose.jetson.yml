@@ -1,6 +1,6 @@
 services:
   mosquitto:
-    image: eclipse-mosquitto:2.0
+    image: eclipse-mosquitto@sha256:914f529386804c8278a4e581526b9be5e1604df44b30daabc70aa97dcefe5268
     container_name: vision-mosquitto
     restart: unless-stopped
     ports:
@@ -13,7 +13,7 @@ services:
       - vision-lab
 
   go2rtc:
-    image: alexxit/go2rtc:latest
+    image: alexxit/go2rtc:1.9.14
     container_name: vision-go2rtc
     restart: unless-stopped
     ports:
@@ -26,33 +26,6 @@ services:
       - ../go2rtc/go2rtc.yaml:/config/go2rtc.yaml:ro
     devices:
       - "${USB_CAMERA_DEVICE:-/dev/video0}:${USB_CAMERA_DEVICE:-/dev/video0}"
-    networks:
-      - vision-lab
-
-  frigate:
-    image: ghcr.io/blakeblackshear/frigate:stable-tensorrt-jp6
-    container_name: vision-frigate
-    restart: unless-stopped
-    privileged: true
-    runtime: nvidia
-    shm_size: "512mb"
-    ports:
-      - "5000:5000"
-    env_file:
-      - ../.env
-    environment:
-      NVIDIA_VISIBLE_DEVICES: all
-      NVIDIA_DRIVER_CAPABILITIES: compute,video,utility
-      YOLO_MODELS: yolov7-320
-      USE_FP16: "true"
-    volumes:
-      - ../frigate/config.jetson.yml:/config/config.yml
-      - ../frigate/models:/config/model_cache
-      - ../frigate/data:/media/frigate
-      - /etc/localtime:/etc/localtime:ro
-    depends_on:
-      - mosquitto
-      - go2rtc
     networks:
       - vision-lab
 
@@ -70,12 +43,28 @@ services:
     environment:
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
-      FACE_PROVIDERS: CPUExecutionProvider
+      FACE_MODEL_NAME: ${FACE_MODEL_NAME:-buffalo_s}
+      FACE_DET_SIZE: ${FACE_DET_SIZE:-320,320}
+      FACE_PROVIDERS: ${FACE_PROVIDERS:-CPUExecutionProvider}
+      FACE_CTX_ID: ${FACE_CTX_ID:--1}
+      STREAM_URL: ${STREAM_URL:-rtsp://go2rtc:8554/usb_camera}
+      STREAM_WORKER_ENABLED: ${STREAM_WORKER_ENABLED:-true}
+      STREAM_CAPTURE_INTERVAL_SECONDS: ${STREAM_CAPTURE_INTERVAL_SECONDS:-1.0}
+      STREAM_RECONNECT_DELAY_SECONDS: ${STREAM_RECONNECT_DELAY_SECONDS:-3.0}
+      STREAM_JPEG_QUALITY: ${STREAM_JPEG_QUALITY:-85}
+      STREAM_MIN_FACE_SCORE: ${STREAM_MIN_FACE_SCORE:-0.5}
+      STREAM_MAX_CAPTURE_FILES: ${STREAM_MAX_CAPTURE_FILES:-2000}
+      STREAM_PREVIEW_UPDATE_INTERVAL_SECONDS: ${STREAM_PREVIEW_UPDATE_INTERVAL_SECONDS:-0.25}
+      STREAM_PREVIEW_MAX_WIDTH: ${STREAM_PREVIEW_MAX_WIDTH:-640}
+      STREAM_PREVIEW_JPEG_QUALITY: ${STREAM_PREVIEW_JPEG_QUALITY:-70}
+      STREAM_READER_BUFFER_SIZE: ${STREAM_READER_BUFFER_SIZE:-1}
     volumes:
       - ../vision-app/data-faces:/data/faces
       - ../vision-app/data-events:/data/events
       - ../vision-app/models:/models/face
       - ../vision-app/samples:/samples
+    depends_on:
+      - go2rtc
     networks:
       - vision-lab
 

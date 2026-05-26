@@ -22,8 +22,10 @@ cameras:
     detect:
       width: 1280
       height: 720
-      fps: 5
+      fps: 30
       enabled: true
+    audio:
+      enabled: false
     objects:
       track:
         - person
@@ -40,12 +42,16 @@ cameras:
     record:
       enabled: true
       alerts:
+        pre_capture: 10
+        post_capture: 10
         retain:
-          days: 3
+          days: 1
           mode: motion
       detections:
+        pre_capture: 10
+        post_capture: 10
         retain:
-          days: 3
+          days: 1
           mode: motion
 
 detectors:
@@ -66,3 +72,5 @@ snapshots:
   retain:
     default: 14
 
+birdseye:
+  enabled: false

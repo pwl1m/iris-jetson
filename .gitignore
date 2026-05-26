@@ -4,6 +4,7 @@ mosquitto/data/
 vision-app/data-faces/
 vision-app/data-events/
 vision-app/models/*.zip
+vision-app/models/**/*.zip
 vision-app/models/**/*.onnx
 vision-app/models/**/*.params
 vision-app/models/**/*.bin
