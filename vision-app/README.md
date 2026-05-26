@@ -39,6 +39,9 @@ Aplicacao principal da Fase 1: API FastAPI, cadastro facial, reconhecimento e wo
 
 O worker consome `STREAM_URL` (padrao: `rtsp://go2rtc:8554/usb_camera`), processa uma captura a cada `STREAM_CAPTURE_INTERVAL_SECONDS`, salva imagens em `CAPTURE_DIR` e grava eventos em `EVENT_LOG_PATH`.
 
+No Jetson, o worker tambem pode operar com `STREAM_SOURCE_KIND=jetson_gst_usb`, abrindo a camera USB diretamente por GStreamer com `nvv4l2decoder` e `appsink`.
+Nesse modo, `STREAM_URL` deixa de ser a fonte primaria de inferencia e passa a servir apenas como fallback/observabilidade externa.
+
 Cada evento contem:
 
 - `capture_id`
@@ -63,3 +66,4 @@ Padrao recomendado atual no Jetson: `FACE_PROVIDERS=CUDAExecutionProvider,CPUExe
 Para usar GPU no InsightFace, configure `FACE_CTX_ID=0` (valor `-1` forca CPU).
 Antes de subir o stack no Jetson, execute `./scripts/prepare_runtime_libs.sh` para montar cuDNN/TensorRT em `runtime-libs/`.
 O `vision-app` agora espera o `go2rtc` responder no probe `STREAM_SOURCE_PROBE_URL` antes de tentar abrir o RTSP.
+Quando `STREAM_SOURCE_KIND=jetson_gst_usb`, esse probe e ignorado e o worker abre `/dev/video*` direto.

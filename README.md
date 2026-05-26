@@ -63,6 +63,8 @@ Segredos opcionais:
 
 No fluxo atual, o `vision-app` consome stream do `go2rtc` diretamente e registra eventos/capturas locais para debug operacional.
 
+Existe agora uma variante experimental para Jetson em que o `vision-app` pode consumir a camera USB diretamente por GStreamer/NVIDIA, sem depender do RTSP interno para inferencia.
+
 ## Perfil Base Da C930e
 
 Para o Jetson, o baseline atual e capturar a Logitech C930e em `1920x1080` usando `MJPG` na entrada V4L2 e restream RTSP para o stack.

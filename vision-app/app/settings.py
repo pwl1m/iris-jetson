@@ -15,7 +15,9 @@ class Settings(BaseSettings):
     event_log_path: str = "/data/events/recognitions.jsonl"
     capture_dir: str = "/data/events/captures"
     camera_name: str = "entrada"
+    stream_source_kind: str = "rtsp"
     stream_url: str = "rtsp://go2rtc:8554/usb_camera"
+    stream_gst_pipeline: str = ""
     stream_worker_enabled: bool = True
     stream_capture_interval_seconds: float = 1.0
     stream_reconnect_delay_seconds: float = 3.0
@@ -28,6 +30,11 @@ class Settings(BaseSettings):
     stream_reader_buffer_size: int = 1
     stream_source_ready_timeout_seconds: float = 20.0
     stream_source_probe_url: str = "http://go2rtc:1984/api/streams"
+    usb_camera_device: str = "/dev/video0"
+    usb_camera_input_format: str = "mjpeg"
+    usb_camera_width: int = 1280
+    usb_camera_height: int = 720
+    usb_camera_fps: int = 15
 
     @property
     def det_size_tuple(self) -> tuple[int, int]:
@@ -37,6 +44,10 @@ class Settings(BaseSettings):
     @property
     def providers_list(self) -> list[str]:
         return [item.strip() for item in self.face_providers.split(",") if item.strip()]
+
+    @property
+    def stream_source_kind_normalized(self) -> str:
+        return self.stream_source_kind.strip().lower()
 
 
 settings = Settings()

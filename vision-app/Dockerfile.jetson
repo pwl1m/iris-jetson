@@ -1,4 +1,4 @@
-FROM python:3.10-slim
+FROM ubuntu:22.04
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -7,24 +7,38 @@ ENV PYTHONUNBUFFERED=1 \
     DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 \
+    python3-dev \
+    python3-pip \
+    python3-venv \
+    python3-gi \
+    python3-gst-1.0 \
+    gir1.2-gstreamer-1.0 \
     build-essential \
+    ffmpeg \
+    gstreamer1.0-tools \
+    gstreamer1.0-plugins-base \
+    gstreamer1.0-plugins-good \
+    gstreamer1.0-plugins-bad \
+    gstreamer1.0-libav \
     libgl1 \
     libglib2.0-0 \
     libsm6 \
     libxext6 \
     libxrender1 \
     libgomp1 \
+    && python3 -m pip install --no-cache-dir --upgrade pip \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 COPY requirements.jetson.txt .
-RUN python -m pip install --no-cache-dir \
+RUN python3 -m pip install --no-cache-dir \
     --extra-index-url https://pypi.jetson-ai-lab.io/jp6/cu126/+simple \
     onnxruntime-gpu==1.24.0 \
-    && python -m pip install --no-cache-dir -r requirements.jetson.txt
+    && python3 -m pip install --no-cache-dir -r requirements.jetson.txt
 
 COPY app ./app
 
 EXPOSE 8080
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["python3", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]

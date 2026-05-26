@@ -17,6 +17,101 @@ from .settings import Settings
 from .storage import FaceStore
 
 
+class _GstUsbCapture:
+    def __init__(self, settings: Settings):
+        self.settings = settings
+        self._gst = None
+        self._pipeline = None
+        self._sink = None
+        self._opened = False
+
+    def open(self) -> bool:
+        try:
+            import gi
+        except ImportError:
+            return False
+
+        gi.require_version("Gst", "1.0")
+        from gi.repository import Gst
+
+        if not Gst.is_initialized():
+            Gst.init(None)
+
+        pipeline = self.settings.stream_gst_pipeline.strip() or self._default_pipeline()
+        self._gst = Gst
+        self._pipeline = Gst.parse_launch(pipeline)
+        self._sink = self._pipeline.get_by_name("visionappsink")
+        if self._sink is None:
+            raise RuntimeError("appsink ausente no pipeline GStreamer")
+
+        change = self._pipeline.set_state(Gst.State.PLAYING)
+        if change == Gst.StateChangeReturn.FAILURE:
+            self.release()
+            return False
+
+        self._opened = True
+        return True
+
+    def isOpened(self) -> bool:
+        return self._opened
+
+    def read(self) -> tuple[bool, np.ndarray | None]:
+        if not self._opened or self._sink is None or self._gst is None:
+            return False, None
+
+        sample = self._sink.emit("try-pull-sample", int(1e9))
+        if sample is None:
+            return False, None
+
+        buffer = sample.get_buffer()
+        caps = sample.get_caps()
+        structure = caps.get_structure(0)
+        width = int(structure.get_value("width"))
+        height = int(structure.get_value("height"))
+
+        ok, map_info = buffer.map(self._gst.MapFlags.READ)
+        if not ok:
+            return False, None
+
+        try:
+            frame = np.ndarray((height, width, 3), dtype=np.uint8, buffer=map_info.data).copy()
+        finally:
+            buffer.unmap(map_info)
+
+        return True, frame
+
+    def release(self) -> None:
+        if self._pipeline is not None and self._gst is not None:
+            self._pipeline.set_state(self._gst.State.NULL)
+        self._pipeline = None
+        self._sink = None
+        self._opened = False
+
+    def _default_pipeline(self) -> str:
+        device = self.settings.usb_camera_device
+        width = self.settings.usb_camera_width
+        height = self.settings.usb_camera_height
+        fps = max(1, self.settings.usb_camera_fps)
+        input_format = self.settings.usb_camera_input_format.strip().lower()
+
+        if input_format == "mjpeg":
+            return (
+                f"v4l2src device={device} io-mode=2 do-timestamp=true ! "
+                f"image/jpeg,width={width},height={height},framerate={fps}/1 ! "
+                "jpegparse ! nvjpegdec ! "
+                "nvvidconv ! video/x-raw,format=BGRx ! "
+                "videoconvert ! video/x-raw,format=BGR ! "
+                "appsink name=visionappsink drop=true max-buffers=1 sync=false"
+            )
+
+        return (
+            f"v4l2src device={device} io-mode=2 do-timestamp=true ! "
+            f"video/x-raw,width={width},height={height},framerate={fps}/1 ! "
+            "videoconvert ! video/x-raw,format=BGR ! "
+            "appsink name=visionappsink drop=true max-buffers=1 sync=false"
+        )
+
+
 class VisionRuntime:
     def __init__(self, settings: Settings):
         self.settings = settings
@@ -44,6 +139,7 @@ class VisionRuntime:
             "last_event_at": None,
             "last_error": None,
             "stream_url": settings.stream_url,
+            "stream_source_kind": settings.stream_source_kind_normalized,
             "camera": settings.camera_name,
         }
         self._latest_event: dict | None = None
@@ -234,19 +330,23 @@ class VisionRuntime:
         return datetime.now(timezone.utc).isoformat()
 
     def _stream_loop(self) -> None:
-        self.logger.info("stream worker starting url=%s", self.settings.stream_url)
+        self.logger.info(
+            "stream worker starting source_kind=%s url=%s",
+            self.settings.stream_source_kind_normalized,
+            self.settings.stream_url,
+        )
         while not self._stop_event.is_set():
             self._wait_for_stream_source()
             if self._stop_event.is_set():
                 break
-            capture = cv2.VideoCapture(self.settings.stream_url, cv2.CAP_FFMPEG)
+            capture = self._open_capture()
             if not capture.isOpened():
-                self._set_stats(last_error="stream indisponivel")
+                self._set_stats(last_error=f"source indisponivel ({self.settings.stream_source_kind_normalized})")
                 self.logger.warning("stream unavailable, retrying in %.1fs", self.settings.stream_reconnect_delay_seconds)
                 time.sleep(self.settings.stream_reconnect_delay_seconds)
                 continue
 
-            if self.settings.stream_reader_buffer_size > 0:
+            if self.settings.stream_source_kind_normalized == "rtsp" and self.settings.stream_reader_buffer_size > 0:
                 capture.set(cv2.CAP_PROP_BUFFERSIZE, float(self.settings.stream_reader_buffer_size))
 
             self._set_stats(running=True, last_error=None)
@@ -276,6 +376,9 @@ class VisionRuntime:
         self.logger.info("stream worker stopped")
 
     def _wait_for_stream_source(self) -> None:
+        if self.settings.stream_source_kind_normalized == "jetson_gst_usb":
+            return
+
         parsed = urllib.parse.urlparse(self.settings.stream_url)
         host = parsed.hostname
         port = parsed.port or (554 if parsed.scheme == "rtsp" else None)
@@ -321,6 +424,22 @@ class VisionRuntime:
                 return
 
             time.sleep(min(1.0, self.settings.stream_reconnect_delay_seconds))
+
+    def _open_capture(self):
+        if self.settings.stream_source_kind_normalized == "jetson_gst_usb":
+            capture = _GstUsbCapture(self.settings)
+            try:
+                opened = capture.open()
+            except Exception as exc:
+                self.logger.exception("failed to open gst usb capture: %s", exc)
+                self._set_stats(last_error=f"falha ao abrir gst usb: {exc}")
+                capture.release()
+                return capture
+            if not opened:
+                self._set_stats(last_error="falha ao abrir gst usb")
+            return capture
+
+        return cv2.VideoCapture(self.settings.stream_url, cv2.CAP_FFMPEG)
 
     def _update_preview(self, frame: np.ndarray, now_monotonic: float) -> None:
         if now_monotonic - self._last_preview_update_monotonic < self.settings.stream_preview_update_interval_seconds:
