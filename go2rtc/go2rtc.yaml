@@ -3,7 +3,7 @@ api:
 
 streams:
   usb_camera:
-    - "ffmpeg:device?video=${USB_CAMERA_INDEX:-0}&video_size=${USB_CAMERA_WIDTH:-1280}x${USB_CAMERA_HEIGHT:-720}&framerate=${USB_CAMERA_FPS:-50}#video=h264"
+    - "ffmpeg:device?video=${USB_CAMERA_INDEX:-0}&input_format=${USB_CAMERA_INPUT_FORMAT:-mjpeg}&video_size=${USB_CAMERA_WIDTH:-1280}x${USB_CAMERA_HEIGHT:-720}&framerate=${USB_CAMERA_FPS:-15}#video=h264"
 
 rtsp:
   listen: ":8554"
@@ -18,4 +18,3 @@ hls:
 
 log:
   level: info
-

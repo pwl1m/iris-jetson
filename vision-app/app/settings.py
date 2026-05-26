@@ -26,6 +26,8 @@ class Settings(BaseSettings):
     stream_preview_max_width: int = 640
     stream_preview_jpeg_quality: int = 70
     stream_reader_buffer_size: int = 1
+    stream_source_ready_timeout_seconds: float = 20.0
+    stream_source_probe_url: str = "http://go2rtc:1984/api/streams"
 
     @property
     def det_size_tuple(self) -> tuple[int, int]:

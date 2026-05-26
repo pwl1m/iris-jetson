@@ -62,3 +62,8 @@ Segredos opcionais:
 - registrar mudancas de modelo em `../docs/DECISIONS.md` e `../docs/MODEL_PLAN.md`
 
 No fluxo atual, o `vision-app` consome stream do `go2rtc` diretamente e registra eventos/capturas locais para debug operacional.
+
+## Perfil Base Da C930e
+
+Para o Jetson, o baseline atual e capturar a Logitech C930e em `1920x1080` usando `MJPG` na entrada V4L2 e restream RTSP para o stack.
+Neste host, `YUYV` em `1080p` limita a camera a `5 fps`, enquanto `MJPG` preserva `1080p` com margem melhor para operacao futura com duas cameras.

@@ -1,7 +1,11 @@
 import json
 import logging
+import socket
 import threading
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -232,6 +236,9 @@ class VisionRuntime:
     def _stream_loop(self) -> None:
         self.logger.info("stream worker starting url=%s", self.settings.stream_url)
         while not self._stop_event.is_set():
+            self._wait_for_stream_source()
+            if self._stop_event.is_set():
+                break
             capture = cv2.VideoCapture(self.settings.stream_url, cv2.CAP_FFMPEG)
             if not capture.isOpened():
                 self._set_stats(last_error="stream indisponivel")
@@ -267,6 +274,53 @@ class VisionRuntime:
 
         self._set_stats(running=False)
         self.logger.info("stream worker stopped")
+
+    def _wait_for_stream_source(self) -> None:
+        parsed = urllib.parse.urlparse(self.settings.stream_url)
+        host = parsed.hostname
+        port = parsed.port or (554 if parsed.scheme == "rtsp" else None)
+        probe_url = (self.settings.stream_source_probe_url or "").strip()
+        deadline = time.monotonic() + max(0.0, self.settings.stream_source_ready_timeout_seconds)
+
+        while not self._stop_event.is_set():
+            host_ready = True
+            if host and port:
+                try:
+                    socket.gethostbyname(host)
+                    with socket.create_connection((host, port), timeout=2):
+                        pass
+                except OSError as exc:
+                    host_ready = False
+                    self._set_stats(last_error=f"aguardando stream source: {exc}")
+
+            probe_ready = True
+            if host_ready and probe_url:
+                try:
+                    with urllib.request.urlopen(probe_url, timeout=2) as response:
+                        if int(getattr(response, "status", 200)) >= 400:
+                            raise urllib.error.HTTPError(
+                                probe_url,
+                                int(response.status),
+                                "probe failure",
+                                hdrs=response.headers,
+                                fp=None,
+                            )
+                except Exception as exc:
+                    probe_ready = False
+                    self._set_stats(last_error=f"aguardando stream probe: {exc}")
+
+            if host_ready and probe_ready:
+                return
+
+            if time.monotonic() >= deadline:
+                self.logger.warning(
+                    "stream source not ready yet url=%s probe=%s, continuing with open attempts",
+                    self.settings.stream_url,
+                    probe_url or "-",
+                )
+                return
+
+            time.sleep(min(1.0, self.settings.stream_reconnect_delay_seconds))
 
     def _update_preview(self, frame: np.ndarray, now_monotonic: float) -> None:
         if now_monotonic - self._last_preview_update_monotonic < self.settings.stream_preview_update_interval_seconds:

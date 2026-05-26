@@ -12,3 +12,4 @@ frigate/models/**/*.trt
 frigate/models/**/*.engine
 __pycache__/
 *.pyc
+runtime-libs/

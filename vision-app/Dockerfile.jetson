@@ -1,4 +1,4 @@
-FROM python:3.11-slim
+FROM python:3.10-slim
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -18,11 +18,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-COPY requirements.txt .
-RUN python -m pip install --no-cache-dir -r requirements.txt
+COPY requirements.jetson.txt .
+RUN python -m pip install --no-cache-dir \
+    --extra-index-url https://pypi.jetson-ai-lab.io/jp6/cu126/+simple \
+    onnxruntime-gpu==1.24.0 \
+    && python -m pip install --no-cache-dir -r requirements.jetson.txt
 
 COPY app ./app
 
 EXPOSE 8080
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]
-

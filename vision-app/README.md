@@ -5,9 +5,8 @@ Aplicacao principal da Fase 1: API FastAPI, cadastro facial, reconhecimento e wo
 ## Conteudo
 
 - `app/`: codigo da aplicacao.
-- `Dockerfile`: imagem para notebook.
 - `Dockerfile.jetson`: imagem para Jetson Orin Nano.
-- `requirements.txt`: dependencias Python.
+- `requirements.jetson.txt`: dependencias Python para Jetson (ORT instalado separadamente).
 - `data-faces/`: banco SQLite de embeddings faciais.
 - `data-events/`: auditoria local de reconhecimentos.
 - `models/`: modelos do InsightFace/ArcFace.
@@ -58,3 +57,9 @@ Use `GET /debug/engine` para verificar:
 - providers disponiveis no runtime ONNX
 - providers realmente ativos nas sessoes dos modelos InsightFace
 - modo atual (`cpu_only` ou `accelerated`)
+
+No Jetson, o `Dockerfile.jetson` instala `onnxruntime-gpu` do indice `pypi.jetson-ai-lab.io` com fallback de providers definido por `FACE_PROVIDERS`.
+Padrao recomendado atual no Jetson: `FACE_PROVIDERS=CUDAExecutionProvider,CPUExecutionProvider`.
+Para usar GPU no InsightFace, configure `FACE_CTX_ID=0` (valor `-1` forca CPU).
+Antes de subir o stack no Jetson, execute `./scripts/prepare_runtime_libs.sh` para montar cuDNN/TensorRT em `runtime-libs/`.
+O `vision-app` agora espera o `go2rtc` responder no probe `STREAM_SOURCE_PROBE_URL` antes de tentar abrir o RTSP.
