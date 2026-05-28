@@ -11,7 +11,6 @@ fi
 
 rsync -az --delete \
   --exclude ".git" \
-  --exclude "frigate/data" \
   --exclude "iris-mosquitto/data" \
   --exclude "iris-app/data-events/*.jsonl" \
   --exclude "__pycache__" \
