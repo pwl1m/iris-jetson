@@ -15,6 +15,7 @@ class Settings(BaseSettings):
 
     worker_log_level: str = "INFO"
     event_log_path: str = "/data/events/recognitions.jsonl"
+    occlusion_log_path: str = "/data/events/occlusions.jsonl"
     capture_dir: str = "/data/events/captures"
     face_crop_dir: str = "/data/events/faces"
     camera_name: str = "entrada"

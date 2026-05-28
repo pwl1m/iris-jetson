@@ -62,7 +62,7 @@ class _GstUsbCapture:
         if not self._opened or self._sink is None or self._gst is None:
             return False, None
 
-        sample = self._sink.emit("try-pull-sample", int(1e9))
+        sample = self._sink.emit("pull-sample")
         if sample is None:
             return False, None
 
@@ -101,7 +101,7 @@ class _GstUsbCapture:
             return (
                 f"v4l2src device={device} io-mode=2 do-timestamp=true ! "
                 f"image/jpeg,width={width},height={height},framerate={fps}/1 ! "
-                "jpegparse ! jpegdec ! "
+                "jpegparse ! nvjpegdec ! "
                 "nvvidconv ! video/x-raw,format=BGRx ! "
                 "videoconvert ! video/x-raw,format=BGR ! "
                 "appsink name=irisappsink drop=true max-buffers=1 sync=false"
@@ -113,84 +113,6 @@ class _GstUsbCapture:
             "videoconvert ! video/x-raw,format=BGR ! "
             "appsink name=irisappsink drop=true max-buffers=1 sync=false"
         )
-
-
-class _GstRtspCapture:
-    def __init__(self, settings: Settings):
-        self.settings = settings
-        self._gst = None
-        self._pipeline = None
-        self._sink = None
-        self._opened = False
-
-    def open(self) -> bool:
-        try:
-            import gi
-        except ImportError:
-            return False
-
-        gi.require_version("Gst", "1.0")
-        from gi.repository import Gst
-
-        if not Gst.is_initialized():
-            Gst.init(None)
-
-        pipeline = (
-            f"rtspsrc location={self.settings.stream_url} latency=0 ! "
-            "rtph264depay ! h264parse ! nvv4l2decoder ! "
-            "nvvidconv ! video/x-raw,format=BGRx ! "
-            "videoconvert ! video/x-raw,format=BGR ! "
-            "appsink name=irisappsink drop=true max-buffers=1 sync=false"
-        )
-        self._gst = Gst
-        self._pipeline = Gst.parse_launch(pipeline)
-        self._sink = self._pipeline.get_by_name("irisappsink")
-        if self._sink is None:
-            raise RuntimeError("appsink ausente no pipeline GStreamer RTSP")
-
-        change = self._pipeline.set_state(Gst.State.PLAYING)
-        if change == Gst.StateChangeReturn.FAILURE:
-            self.release()
-            return False
-
-        self._opened = True
-        return True
-
-    def isOpened(self) -> bool:
-        return self._opened
-
-    def read(self) -> tuple[bool, np.ndarray | None]:
-        if not self._opened or self._sink is None or self._gst is None:
-            return False, None
-
-        sample = self._sink.emit("try-pull-sample", int(1e9))
-        if sample is None:
-            return False, None
-
-        buffer = sample.get_buffer()
-        caps = sample.get_caps()
-        structure = caps.get_structure(0)
-        width = int(structure.get_value("width"))
-        height = int(structure.get_value("height"))
-
-        ok, map_info = buffer.map(self._gst.MapFlags.READ)
-        if not ok:
-            return False, None
-
-        try:
-            frame = np.ndarray((height, width, 3), dtype=np.uint8, buffer=map_info.data).copy()
-        finally:
-            buffer.unmap(map_info)
-
-        return True, frame
-
-    def release(self) -> None:
-        if self._pipeline is not None and self._gst is not None:
-            self._pipeline.set_state(self._gst.State.NULL)
-        self._pipeline = None
-        self._sink = None
-        self._opened = False
-
 
 
 class IrisRuntime:
@@ -232,6 +154,8 @@ class IrisRuntime:
         self._latest_preview_jpeg: bytes | None = None
         self._latest_preview_at: str | None = None
         self._last_preview_update_monotonic = 0.0
+        self._last_landmarks: int = 0
+        self._occlusion_lock = threading.Lock()
 
     def start(self) -> None:
         logging.basicConfig(
@@ -638,30 +562,7 @@ class IrisRuntime:
 
     def _open_capture(self):
         if self.settings.stream_source_kind_normalized == "jetson_gst_usb":
-            capture = _GstUsbCapture(self.settings)
-            try:
-                opened = capture.open()
-            except Exception as exc:
-                self.logger.exception("failed to open gst usb capture: %s", exc)
-                self._set_stats(last_error=f"falha ao abrir gst usb: {exc}")
-                capture.release()
-                return capture
-            if not opened:
-                self._set_stats(last_error="falha ao abrir gst usb")
-            return capture
-
-        if self.settings.stream_source_kind_normalized == "gst_rtsp":
-            capture = _GstRtspCapture(self.settings)
-            try:
-                opened = capture.open()
-            except Exception as exc:
-                self.logger.exception("failed to open gst rtsp capture: %s", exc)
-                self._set_stats(last_error=f"falha ao abrir gst rtsp: {exc}")
-                capture.release()
-                return capture
-            if not opened:
-                self._set_stats(last_error="falha ao abrir gst rtsp")
-            return capture
+            return cv2.VideoCapture(self.settings.usb_camera_device, cv2.CAP_V4L2)
 
         return cv2.VideoCapture(self.settings.stream_url, cv2.CAP_FFMPEG)
 
@@ -689,6 +590,18 @@ class IrisRuntime:
             self._latest_preview_jpeg = encoded.tobytes()
             self._latest_preview_at = self._now()
 
+    def recent_occlusions(self, limit: int = 50) -> dict:
+        return {"events": read_jsonl_tail(self._occlusion_log(), limit)}
+
+    def _occlusion_log(self) -> Path:
+        path = Path(self.settings.occlusion_log_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def _write_occlusion(self, entry: dict) -> None:
+        with self._occlusion_log().open("a", encoding="utf-8") as output:
+            output.write(json.dumps(entry, ensure_ascii=True) + "\n")
+
     def _process_frame(self, frame: np.ndarray) -> None:
         capture_number = self._increment_stat("captures_seen")
         captured_at = self._now()
@@ -697,9 +610,30 @@ class IrisRuntime:
         try:
             detection, quality, recognition = self.pipeline.analyze_frame(frame)
             face_score = float(detection.metadata.get("det_score") or 0.0)
-            if face_score < self.settings.stream_min_face_score or not quality.get("accepted"):
+            current_landmarks = int(detection.metadata.get("landmarks_detected") or 0)
+
+            if quality.get("reason") == "face_ocluida":
+                sudden = self._last_landmarks >= 80 and current_landmarks < 40
+                self._write_occlusion({
+                    "captured_at": captured_at,
+                    "camera_id": self.settings.camera_1_id,
+                    "landmarks_detected": current_landmarks,
+                    "total_landmarks": detection.metadata.get("total_landmarks", 0),
+                    "occlusion_ratio": detection.metadata.get("occlusion_ratio", 1.0),
+                    "det_score": detection.det_score,
+                    "bbox": detection.bbox,
+                    "sudden": sudden,
+                    "previous_landmarks": self._last_landmarks,
+                })
+                self._set_stats(last_error="face_ocluida")
+                self._last_landmarks = 0
                 return
 
+            if face_score < self.settings.stream_min_face_score or not quality.get("accepted"):
+                self._last_landmarks = 0
+                return
+
+            self._last_landmarks = current_landmarks
             event_id = f"{captured_at.replace(':', '').replace('+', 'Z')}_{capture_number:08d}"
             image_path = self._save_capture(event_id, frame)
             face_path = None

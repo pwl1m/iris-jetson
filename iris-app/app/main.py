@@ -345,6 +345,15 @@ _DASHBOARD_HTML = """\
       </table>
     </div>
   </section>
+  <section class="panel" style="grid-column:1/-1">
+    <h2>Tentativas de Oclusao</h2>
+    <div class="events">
+      <table>
+        <thead><tr><th>timestamp</th><th>landmarks</th><th>ratio</th><th>det_score</th><th>bbox</th><th>subita</th></tr></thead>
+        <tbody id="occlusionRows"><tr><td colspan="6" class="empty">nenhuma tentativa detectada</td></tr></tbody>
+      </table>
+    </div>
+  </section>
 </main>
 <script>
 const fmt = (value) => value === null || value === undefined ? "-" : value;
@@ -633,6 +642,20 @@ async function refresh() {
     </tr>`;
   }).join("");
   document.getElementById("eventRows").innerHTML = rows;
+
+  fetch("/occlusions?limit=50", {cache: "no-store"}).then(res => res.json()).then(payload => {
+    const occlusions = payload.events || [];
+    document.getElementById("occlusionRows").innerHTML = occlusions.length ? occlusions.map(o => `
+      <tr>
+        <td>${o.captured_at || "-"}</td>
+        <td>${o.landmarks_detected || 0}/${o.total_landmarks || 0}</td>
+        <td>${fixed(o.occlusion_ratio)}</td>
+        <td>${fixed(o.det_score)}</td>
+        <td>${o.bbox ? o.bbox.map(v => Number(v).toFixed(0)).join(",") : "-"}</td>
+        <td>${o.sudden ? '<span class="error">SUBITA</span>' : "-"}</td>
+      </tr>
+    `).join("") : '<tr><td colspan="6" class="empty">nenhuma tentativa detectada</td></tr>';
+  }).catch(() => {});
 }
 
 document.getElementById("enrollLatest").addEventListener("click", () => enrollLatest().catch(console.error));
@@ -700,6 +723,11 @@ def debug_engine() -> dict:
 @app.get("/debug/pipeline")
 def debug_pipeline() -> dict:
     return runtime.debug_pipeline()
+
+
+@app.get("/occlusions")
+def occlusions(limit: int = 50) -> dict:
+    return runtime.recent_occlusions(limit=limit)
 
 
 @app.get("/cameras")

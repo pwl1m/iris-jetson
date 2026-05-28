@@ -12,6 +12,29 @@ services:
     networks:
       - iris-lab
 
+  iris-go2rtc:
+    image: alexxit/go2rtc:1.9.14
+    container_name: iris-go2rtc
+    restart: unless-stopped
+    env_file:
+      - ./.env
+    ports:
+      - "1984:1984"
+      - "8554:8554"
+      - "8555:8555"
+    volumes:
+      - ./iris-go2rtc/go2rtc.yaml:/config/go2rtc.yaml:ro
+    devices:
+      - "${USB_CAMERA_DEVICE:-/dev/video0}:${USB_CAMERA_DEVICE:-/dev/video0}"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:1984/api/streams"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 5s
+    networks:
+      - iris-lab
+
   iris-app:
     build:
       context: ./iris-app
@@ -35,7 +58,7 @@ services:
       FACE_TRT_FP16: ${FACE_TRT_FP16:-false}
       FACE_TRT_ENGINE_CACHE_PATH: ${FACE_TRT_ENGINE_CACHE_PATH:-}
       LD_LIBRARY_PATH: /opt/jetson-libs/cuda:/opt/jetson-libs/system
-      STREAM_SOURCE_KIND: ${STREAM_SOURCE_KIND:-jetson_gst_usb}
+      STREAM_SOURCE_KIND: ${STREAM_SOURCE_KIND:-gst_rtsp}
       STREAM_URL: ${STREAM_URL:-rtsp://iris-go2rtc:8554/usb_camera}
       STREAM_GST_PIPELINE: ${STREAM_GST_PIPELINE:-}
       STREAM_WORKER_ENABLED: ${STREAM_WORKER_ENABLED:-true}
@@ -67,6 +90,9 @@ services:
       - /usr/lib/aarch64-linux-gnu/tegra:/usr/lib/aarch64-linux-gnu/tegra:ro
     devices:
       - "${USB_CAMERA_DEVICE:-/dev/video0}:${USB_CAMERA_DEVICE:-/dev/video0}"
+    depends_on:
+      iris-go2rtc:
+        condition: service_healthy
     networks:
       - iris-lab
 
