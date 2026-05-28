@@ -17,6 +17,25 @@ def cosine_similarity(left: np.ndarray, right: np.ndarray) -> float:
     return float(np.dot(left, right) / (left_norm * right_norm))
 
 
+def _landmark_occlusion(face) -> dict:
+    for attr in ("landmark_2d_106", "landmark_3d_68"):
+        lm = getattr(face, attr, None)
+        if lm is not None and isinstance(lm, np.ndarray) and lm.size > 0:
+            total = int(lm.shape[0])
+            if total == 0:
+                continue
+            valid = int(np.sum(np.any(lm != 0, axis=-1)))
+            threshold = total // 2
+            return {
+                "landmarks_detected": valid,
+                "total_landmarks": total,
+                "landmark_model": attr,
+                "occluded": valid < threshold,
+                "occlusion_ratio": round(1.0 - valid / total, 4) if total > 0 else 1.0,
+            }
+    return {"landmarks_detected": 0, "total_landmarks": 0, "landmark_model": None, "occluded": False, "occlusion_ratio": 0.0}
+
+
 class InsightFaceRecognizer:
     def __init__(
         self,
@@ -67,8 +86,10 @@ class InsightFaceRecognizer:
 
         face = max(faces, key=lambda item: float((item.bbox[2] - item.bbox[0]) * (item.bbox[3] - item.bbox[1])))
         embedding = np.asarray(face.embedding, dtype=np.float32)
+        occlusion = _landmark_occlusion(face)
         metadata = {
             "bbox": [float(value) for value in face.bbox],
             "det_score": float(getattr(face, "det_score", 0.0)),
+            **occlusion,
         }
         return embedding, metadata
