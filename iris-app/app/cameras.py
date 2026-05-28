@@ -18,4 +18,3 @@ def configured_cameras(settings: Settings) -> list[CameraConfig]:
         ),
     ]
     return [camera for camera in cameras if camera.camera_id]
-

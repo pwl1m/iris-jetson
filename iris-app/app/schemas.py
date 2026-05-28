@@ -28,4 +28,3 @@ class QualityResult:
     min_width: int
     min_height: int
     reason: str | None
-
