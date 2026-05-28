@@ -21,13 +21,13 @@ jobs:
           username: ${{ secrets.JETSON_USER }}
           key: ${{ secrets.JETSON_SSH_KEY }}
           port: ${{ secrets.JETSON_PORT || '22' }}
-          source: ".github,AGENTS.md,README.md,.env.example,.gitignore,compose,frigate,go2rtc,mosquitto,scripts,vision-app"
-          target: ${{ secrets.JETSON_DEPLOY_PATH || '/opt/jetson-orin-deploy' }}
+          source: ".github,AGENTS.md,README.md,.env.example,.gitignore,docker-compose.yml,iris-app,iris-go2rtc,iris-mosquitto,runtime-libs,scripts"
+          target: ${{ secrets.JETSON_DEPLOY_PATH || '~/iris-jetson' }}
 
       - name: Deploy on Jetson
         uses: appleboy/ssh-action@v1.0.3
         env:
-          JETSON_DEPLOY_PATH: ${{ secrets.JETSON_DEPLOY_PATH || '/opt/jetson-orin-deploy' }}
+          JETSON_DEPLOY_PATH: ${{ secrets.JETSON_DEPLOY_PATH || '~/iris-jetson' }}
           JETSON_HEALTH_URL: ${{ secrets.JETSON_HEALTH_URL || 'http://localhost:8081/health' }}
         with:
           host: ${{ secrets.JETSON_HOST }}
