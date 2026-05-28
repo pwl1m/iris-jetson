@@ -6,7 +6,7 @@ Esta pasta representa o futuro repositorio de deploy do Jetson Orin Nano. O foco
 
 ## Escopo
 
-- `compose/docker-compose.jetson.yml`: compose principal do Jetson.
+- `docker-compose.yml`: compose principal do Jetson na raiz do deploy.
 - `iris-app/`: API facial, worker MQTT, SQLite e modelos faciais.
 - `frigate/`, `iris-go2rtc/`, `iris-mosquitto/`: componentes de runtime e persistencia local.
 - `scripts/`: instalacao, preflight, compose e testes operacionais.

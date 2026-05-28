@@ -1,0 +1,102 @@
+services:
+  iris-mosquitto:
+    image: eclipse-mosquitto@sha256:914f529386804c8278a4e581526b9be5e1604df44b30daabc70aa97dcefe5268
+    container_name: iris-mosquitto
+    restart: unless-stopped
+    ports:
+      - "1883:1883"
+      - "9001:9001"
+    volumes:
+      - ./iris-mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./iris-mosquitto/data:/mosquitto/data
+    networks:
+      - iris-lab
+
+  iris-go2rtc:
+    image: alexxit/go2rtc:1.9.14
+    container_name: iris-go2rtc
+    restart: unless-stopped
+    env_file:
+      - ./.env
+    ports:
+      - "1984:1984"
+      - "8554:8554"
+      - "8555:8555"
+    volumes:
+      - ./iris-go2rtc/go2rtc.yaml:/config/go2rtc.yaml:ro
+    devices:
+      - "${USB_CAMERA_DEVICE:-/dev/video0}:${USB_CAMERA_DEVICE:-/dev/video0}"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:1984/api/streams"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 5s
+    networks:
+      - iris-lab
+
+  iris-app:
+    build:
+      context: ./iris-app
+      dockerfile: Dockerfile.jetson
+    container_name: iris-app
+    restart: unless-stopped
+    runtime: nvidia
+    env_file:
+      - ./.env
+    ports:
+      - "8081:8080"
+    environment:
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      GST_PLUGIN_PATH: /usr/lib/aarch64-linux-gnu/gstreamer-1.0
+      GST_PLUGIN_SYSTEM_PATH: /usr/lib/aarch64-linux-gnu/gstreamer-1.0
+      FACE_MODEL_NAME: ${FACE_MODEL_NAME:-buffalo_l}
+      FACE_DET_SIZE: ${FACE_DET_SIZE:-480,480}
+      FACE_PROVIDERS: ${FACE_PROVIDERS:-TensorrtExecutionProvider,CUDAExecutionProvider,CPUExecutionProvider}
+      FACE_CTX_ID: ${FACE_CTX_ID:--1}
+      FACE_TRT_FP16: ${FACE_TRT_FP16:-false}
+      FACE_TRT_ENGINE_CACHE_PATH: ${FACE_TRT_ENGINE_CACHE_PATH:-}
+      LD_LIBRARY_PATH: /opt/jetson-libs/cuda:/opt/jetson-libs/system
+      STREAM_SOURCE_KIND: ${STREAM_SOURCE_KIND:-rtsp}
+      STREAM_URL: ${STREAM_URL:-rtsp://iris-go2rtc:8554/usb_camera}
+      STREAM_GST_PIPELINE: ${STREAM_GST_PIPELINE:-}
+      STREAM_WORKER_ENABLED: ${STREAM_WORKER_ENABLED:-true}
+      STREAM_CAPTURE_INTERVAL_SECONDS: ${STREAM_CAPTURE_INTERVAL_SECONDS:-1.0}
+      STREAM_RECONNECT_DELAY_SECONDS: ${STREAM_RECONNECT_DELAY_SECONDS:-3.0}
+      STREAM_JPEG_QUALITY: ${STREAM_JPEG_QUALITY:-85}
+      STREAM_MIN_FACE_SCORE: ${STREAM_MIN_FACE_SCORE:-0.5}
+      STREAM_MAX_CAPTURE_FILES: ${STREAM_MAX_CAPTURE_FILES:-2000}
+      STREAM_PREVIEW_UPDATE_INTERVAL_SECONDS: ${STREAM_PREVIEW_UPDATE_INTERVAL_SECONDS:-0.25}
+      STREAM_PREVIEW_MAX_WIDTH: ${STREAM_PREVIEW_MAX_WIDTH:-640}
+      STREAM_PREVIEW_JPEG_QUALITY: ${STREAM_PREVIEW_JPEG_QUALITY:-70}
+      STREAM_READER_BUFFER_SIZE: ${STREAM_READER_BUFFER_SIZE:-1}
+      STREAM_SOURCE_READY_TIMEOUT_SECONDS: ${STREAM_SOURCE_READY_TIMEOUT_SECONDS:-20}
+      STREAM_SOURCE_PROBE_URL: ${STREAM_SOURCE_PROBE_URL:-http://iris-go2rtc:1984/api/streams}
+      USB_CAMERA_DEVICE: ${USB_CAMERA_DEVICE:-/dev/video0}
+      USB_CAMERA_INPUT_FORMAT: ${USB_CAMERA_INPUT_FORMAT:-mjpeg}
+      USB_CAMERA_WIDTH: ${USB_CAMERA_WIDTH:-1280}
+      USB_CAMERA_HEIGHT: ${USB_CAMERA_HEIGHT:-720}
+      USB_CAMERA_FPS: ${USB_CAMERA_FPS:-15}
+    volumes:
+      - ./iris-app/data-faces:/data/faces
+      - ./iris-app/data-events:/data/events
+      - ./iris-app/models:/models/face
+      - ./iris-app/samples:/samples
+      - ./iris-app/trt-engines:/data/trt-engines
+      - /usr/local/cuda/targets/aarch64-linux/lib:/opt/jetson-libs/cuda:ro
+      - ./runtime-libs:/opt/jetson-libs/system:ro
+      - /usr/lib/aarch64-linux-gnu/gstreamer-1.0:/usr/lib/aarch64-linux-gnu/gstreamer-1.0:ro
+      - /usr/lib/aarch64-linux-gnu/tegra:/usr/lib/aarch64-linux-gnu/tegra:ro
+    devices:
+      - "${USB_CAMERA_DEVICE:-/dev/video0}:${USB_CAMERA_DEVICE:-/dev/video0}"
+    depends_on:
+      iris-go2rtc:
+        condition: service_healthy
+    networks:
+      - iris-lab
+
+networks:
+  iris-lab:
+    name: iris-lab
+    driver: bridge

@@ -12,4 +12,4 @@ if [[ "${1:-}" == "--build" ]]; then
   BUILD_FLAG=(--build)
 fi
 
-${COMPOSE} -f compose/docker-compose.jetson.yml --env-file .env up -d --remove-orphans "${BUILD_FLAG[@]}"
+${COMPOSE} up -d --remove-orphans "${BUILD_FLAG[@]}"

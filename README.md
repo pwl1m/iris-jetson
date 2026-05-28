@@ -4,7 +4,7 @@ Recorte operacional da stack facial para o NVIDIA Jetson Orin Nano. Esta pasta f
 
 ## Conteudo
 
-- `compose/`: compose do Jetson.
+- `docker-compose.yml`: compose principal do Jetson na raiz.
 - `iris-go2rtc/`: configuracao da camera USB/restream.
 - `iris-mosquitto/`: broker MQTT e persistencia local.
 - `scripts/`: instalacao, preflight, subida e testes do runtime.
@@ -19,19 +19,19 @@ cp .env.example .env
 ./scripts/install_jetson_dependencies.sh
 ./scripts/docker_doctor.sh
 ./scripts/jetson_preflight.sh
-./scripts/compose_jetson_up.sh
+docker compose up -d
 ```
 
 ## Parar
 
 ```bash
-./scripts/compose_jetson_down.sh
+docker compose down
 ```
 
 ## Pre-Pull Manual (Opcional)
 
 ```bash
-./scripts/prepull_images.sh
+docker compose pull
 ```
 
 ## Deploy Automatizado
