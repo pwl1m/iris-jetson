@@ -115,6 +115,84 @@ class _GstUsbCapture:
         )
 
 
+class _GstRtspCapture:
+    def __init__(self, settings: Settings):
+        self.settings = settings
+        self._gst = None
+        self._pipeline = None
+        self._sink = None
+        self._opened = False
+
+    def open(self) -> bool:
+        try:
+            import gi
+        except ImportError:
+            return False
+
+        gi.require_version("Gst", "1.0")
+        from gi.repository import Gst
+
+        if not Gst.is_initialized():
+            Gst.init(None)
+
+        pipeline = (
+            f"rtspsrc location={self.settings.stream_url} latency=0 ! "
+            "rtph264depay ! h264parse ! nvv4l2decoder ! "
+            "nvvidconv ! video/x-raw,format=BGRx ! "
+            "videoconvert ! video/x-raw,format=BGR ! "
+            "appsink name=irisappsink drop=true max-buffers=1 sync=false"
+        )
+        self._gst = Gst
+        self._pipeline = Gst.parse_launch(pipeline)
+        self._sink = self._pipeline.get_by_name("irisappsink")
+        if self._sink is None:
+            raise RuntimeError("appsink ausente no pipeline GStreamer RTSP")
+
+        change = self._pipeline.set_state(Gst.State.PLAYING)
+        if change == Gst.StateChangeReturn.FAILURE:
+            self.release()
+            return False
+
+        self._opened = True
+        return True
+
+    def isOpened(self) -> bool:
+        return self._opened
+
+    def read(self) -> tuple[bool, np.ndarray | None]:
+        if not self._opened or self._sink is None or self._gst is None:
+            return False, None
+
+        sample = self._sink.emit("try-pull-sample", int(1e9))
+        if sample is None:
+            return False, None
+
+        buffer = sample.get_buffer()
+        caps = sample.get_caps()
+        structure = caps.get_structure(0)
+        width = int(structure.get_value("width"))
+        height = int(structure.get_value("height"))
+
+        ok, map_info = buffer.map(self._gst.MapFlags.READ)
+        if not ok:
+            return False, None
+
+        try:
+            frame = np.ndarray((height, width, 3), dtype=np.uint8, buffer=map_info.data).copy()
+        finally:
+            buffer.unmap(map_info)
+
+        return True, frame
+
+    def release(self) -> None:
+        if self._pipeline is not None and self._gst is not None:
+            self._pipeline.set_state(self._gst.State.NULL)
+        self._pipeline = None
+        self._sink = None
+        self._opened = False
+
+
+
 class IrisRuntime:
     def __init__(self, settings: Settings):
         self.settings = settings
@@ -570,6 +648,19 @@ class IrisRuntime:
                 return capture
             if not opened:
                 self._set_stats(last_error="falha ao abrir gst usb")
+            return capture
+
+        if self.settings.stream_source_kind_normalized == "gst_rtsp":
+            capture = _GstRtspCapture(self.settings)
+            try:
+                opened = capture.open()
+            except Exception as exc:
+                self.logger.exception("failed to open gst rtsp capture: %s", exc)
+                self._set_stats(last_error=f"falha ao abrir gst rtsp: {exc}")
+                capture.release()
+                return capture
+            if not opened:
+                self._set_stats(last_error="falha ao abrir gst rtsp")
             return capture
 
         return cv2.VideoCapture(self.settings.stream_url, cv2.CAP_FFMPEG)
