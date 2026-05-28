@@ -37,7 +37,7 @@ _DOCS_HTML = """\
 <body>
 
 <h1>Iris App</h1>
-<div class="version">v0.2.0 &mdash; FastAPI · InsightFace buffalo_s · SQLite</div>
+<div class="version">v0.2.0 &mdash; FastAPI · InsightFace · SQLite</div>
 
 <div class="endpoint">
   <div>
@@ -51,7 +51,7 @@ curl http://localhost:8081/health</pre>
   <div class="label" style="margin-top:.8rem">Resposta</div>
   <div class="response-fields">
     <div class="field"><span class="fname">status</span><span class="ftype">string</span><span class="fdesc">"ok" quando o servico esta operacional</span></div>
-    <div class="field"><span class="fname">model</span><span class="ftype">string</span><span class="fdesc">nome do modelo InsightFace carregado (ex: "buffalo_s")</span></div>
+    <div class="field"><span class="fname">model</span><span class="ftype">string</span><span class="fdesc">nome do modelo InsightFace carregado no runtime atual</span></div>
     <div class="field"><span class="fname">threshold</span><span class="ftype">float</span><span class="fdesc">limite minimo de similaridade para aceitar um match</span></div>
     <div class="field"><span class="fname">providers</span><span class="ftype">list</span><span class="fdesc">providers ONNX em uso (ex: ["CPUExecutionProvider"])</span></div>
     <div class="field"><span class="fname">mqtt_topic</span><span class="ftype">string</span><span class="fdesc">topico MQTT que o worker esta escutando</span></div>
@@ -138,29 +138,27 @@ curl -s -F "file=@foto.jpg" http://localhost:8081/recognize \\
     <span style="color:#facc15">⚠</span>
     <span class="path" style="color:#facc15;font-size:1rem">Assertividade baixa? Cadastre com fotos da própria câmera</span>
   </div>
-  <p class="desc" style="margin-top:.6rem">Fotos de perfil (alta resolução, boa iluminação) geram embeddings muito diferentes dos snapshots capturados pelo Frigate (baixa resolução, ângulo variado). O threshold padrão é <strong style="color:#e0e0e0">0.55</strong> — similaridade abaixo disso resulta em <code>no_match</code>. Para bons resultados, cadastre com snapshots reais da câmera.</p>
-  <div class="label" style="margin-top:.8rem">Passo a passo — cadastrar pelo snapshot do Frigate</div>
-  <pre><span class="comment"># 1. pegar o snapshot de um evento recente (substitua pelo ID real)</span>
-EVENT_ID="1779751437.157832-r31kf0"
-curl -s "http://localhost:5000/api/events/${EVENT_ID}/snapshot.jpg" -o /tmp/snap_frigate.jpg
+  <p class="desc" style="margin-top:.6rem">Fotos de perfil com iluminacao, angulo e distancia diferentes da camera real tendem a gerar embeddings fracos para reconhecimento no stream. O threshold padrao e <strong style="color:#e0e0e0">0.55</strong>. Para bons resultados, cadastre usando capturas geradas pelo proprio worker do Iris App.</p>
+  <div class="label" style="margin-top:.8rem">Passo a passo — cadastrar pela ultima captura do worker</div>
+  <pre><span class="comment"># 1. baixar a ultima captura processada</span>
+curl -s http://localhost:8081/captures/latest/image -o /tmp/iris_latest.jpg
 
 <span class="comment"># 2. conferir como ficou a imagem</span>
-xdg-open /tmp/snap_frigate.jpg
+xdg-open /tmp/iris_latest.jpg
 
 <span class="comment"># 3. cadastrar com essa foto</span>
-curl -F "subject=paulo" -F "file=@/tmp/snap_frigate.jpg" http://localhost:8081/enroll</pre>
+curl -F "subject=paulo" -F "file=@/tmp/iris_latest.jpg" http://localhost:8081/enroll</pre>
   <div class="label" style="margin-top:.8rem">Cadastrar múltiplas amostras (recomendado)</div>
-  <pre><span class="comment"># repetir com 3-5 snapshots diferentes para melhorar assertividade</span>
-for ID in "evento-id-1" "evento-id-2" "evento-id-3"; do
-  curl -s "http://localhost:5000/api/events/${ID}/snapshot.jpg" -o /tmp/snap_${ID}.jpg
-  curl -F "subject=paulo" -F "file=@/tmp/snap_${ID}.jpg" http://localhost:8081/enroll
+  <pre><span class="comment"># repetir com 3-5 capturas diferentes para melhorar assertividade</span>
+for ID in "capture-id-1" "capture-id-2" "capture-id-3"; do
+  curl -s "http://localhost:8081/captures/${ID}/image" -o "/tmp/${ID}.jpg"
+  curl -F "subject=paulo" -F "file=@/tmp/${ID}.jpg" http://localhost:8081/enroll
 done</pre>
-  <div class="label" style="margin-top:.8rem">Listar IDs de eventos recentes com snapshot</div>
-  <pre><span class="comment"># ver eventos recentes de pessoa com snapshot disponível</span>
-curl -s "http://localhost:5000/api/events?limit=10&label=person&has_snapshot=1" \
-  | python3 -c "import sys,json; [print(e['id']) for e in json.load(sys.stdin)]"</pre>
+  <div class="label" style="margin-top:.8rem">Listar IDs de capturas recentes</div>
+  <pre><span class="comment"># ver capturas recentes e escolher IDs para re-cadastro</span>
+curl -s "http://localhost:8081/captures?limit=10" | python3 -m json.tool</pre>
   <div class="label" style="margin-top:.8rem">Monitorar reconhecimentos em tempo real</div>
-  <pre><span class="comment"># acompanhar log ao vivo — aparece cada vez que o Frigate detecta uma pessoa</span>
+  <pre><span class="comment"># acompanhar log ao vivo — aparece cada vez que o worker processa uma captura valida</span>
 tail -f /data/events/recognitions.jsonl
 
 <span class="comment"># ou via MQTT</span>
@@ -456,8 +454,8 @@ document.getElementById("subjectSelect").addEventListener("change", (event) => {
 document.getElementById("subjectInput").addEventListener("change", () => refreshSamples().catch(console.error));
 refresh().catch(console.error);
 refreshSamples().catch(console.error);
-setInterval(() => refreshPreviewImage(), 250);
-setInterval(() => refresh().catch(console.error), 1000);
+setInterval(() => refreshPreviewImage(), 1000);
+setInterval(() => refresh().catch(console.error), 3000);
 </script>
 </body>
 </html>
