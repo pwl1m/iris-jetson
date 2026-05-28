@@ -16,11 +16,17 @@ Aplicacao principal da Fase 1: API FastAPI, cadastro facial, reconhecimento e wo
 
 - `GET /health`
 - `GET /debug/engine`
+- `GET /debug/pipeline`
+- `GET /cameras`
+- `GET /cameras/{camera_id}/status`
+- `POST /cameras/{camera_id}/start`
+- `POST /cameras/{camera_id}/stop`
 - `GET /subjects`
 - `DELETE /subjects/{subject}`
 - `GET /subjects/{subject}/samples`
 - `POST /enroll`
 - `POST /recognize`
+- `POST /compare`
 - `DELETE /samples/{sample_id}`
 - `GET /stream/status`
 - `POST /stream/start`
@@ -29,28 +35,48 @@ Aplicacao principal da Fase 1: API FastAPI, cadastro facial, reconhecimento e wo
 - `GET /captures/latest`
 - `GET /captures/{capture_id}/image`
 - `POST /captures/{capture_id}/enroll?subject=nome`
+- `GET /events`
+- `GET /events/{event_id}`
+- `GET /events/{event_id}/frame.jpg`
+- `GET /events/{event_id}/face.jpg`
+- `POST /events/{event_id}/enroll?subject=nome`
 
 ## Dashboard
 
 - `GET /`: dashboard operacional com captura atual, log de comparacoes, cadastro por captura e gerenciamento de sujeitos/amostras.
+- `GET /`: inclui upload manual para cadastro e comparacao, preview da imagem enviada, crop detectado e lista de candidatos.
 - `GET /api-help`: referencia simples de endpoints.
 
 ## Worker De Stream
 
 O worker consome `STREAM_URL` (padrao: `rtsp://iris-go2rtc:8554/usb_camera`), processa uma captura a cada `STREAM_CAPTURE_INTERVAL_SECONDS`, salva imagens em `CAPTURE_DIR` e grava eventos em `EVENT_LOG_PATH`.
 
+O pipeline atual ja separa detector, filtro de qualidade, crop de rosto e reconhecimento `buffalo_l`, conforme o plano em `../../docs/IRIS_PIPELINE_PLAN_2026-05-29.md`.
+
 No Jetson, o worker tambem pode operar com `STREAM_SOURCE_KIND=jetson_gst_usb`, abrindo a camera USB diretamente por GStreamer com `nvv4l2decoder` e `appsink`.
 Nesse modo, `STREAM_URL` deixa de ser a fonte primaria de inferencia e passa a servir apenas como fallback/observabilidade externa.
 
 Cada evento contem:
 
-- `capture_id`
-- `capture_number`
-- `camera`
+- `event_id`
+- `camera_id`
 - `captured_at`
-- `image_path`
-- `image_url`
-- `recognition` com status, subject, similarity, face e candidates
+- `frame_image_path`
+- `frame_image_url`
+- `face_image_path`
+- `face_image_url`
+- `detector`
+- `quality`
+- `recognition`
+
+Contrato de integracao atual:
+
+- `GET /events`
+- `GET /events/{event_id}`
+- `GET /events/{event_id}/frame.jpg`
+- `GET /events/{event_id}/face.jpg`
+- `POST /events/{event_id}/enroll?subject=nome`
+- `GET /debug/pipeline`
 
 ## Validacao De Engine
 
