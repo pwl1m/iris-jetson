@@ -18,5 +18,5 @@ if [ -n "${IMAGE}" ]; then
   curl -fsS -F "file=@${IMAGE}" "${BASE_URL}/recognize"
   echo
 else
-  echo "No image provided. Usage: $0 vision-app/samples/snapshots/person.jpg subject_name"
+  echo "No image provided. Usage: $0 iris-app/samples/snapshots/person.jpg subject_name"
 fi

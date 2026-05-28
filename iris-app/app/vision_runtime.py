@@ -115,7 +115,7 @@ class _GstUsbCapture:
 class VisionRuntime:
     def __init__(self, settings: Settings):
         self.settings = settings
-        self.logger = logging.getLogger("vision-app")
+        self.logger = logging.getLogger("iris-app")
         self.store = FaceStore(settings.face_db_path)
         self.recognizer = InsightFaceRecognizer(
             model_name=settings.face_model_name,

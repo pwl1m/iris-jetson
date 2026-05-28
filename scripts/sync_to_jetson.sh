@@ -2,7 +2,7 @@
 set -euo pipefail
 
 JETSON_TARGET="${1:-}"
-REMOTE_DIR="${2:-~/jetson-orin-vision-lab}"
+REMOTE_DIR="${2:-~/iris-jetson}"
 
 if [ -z "${JETSON_TARGET}" ]; then
   echo "Usage: $0 user@jetson-host [remote_dir]"
@@ -12,8 +12,8 @@ fi
 rsync -az --delete \
   --exclude ".git" \
   --exclude "frigate/data" \
-  --exclude "mosquitto/data" \
-  --exclude "vision-app/data-events/*.jsonl" \
+  --exclude "iris-mosquitto/data" \
+  --exclude "iris-app/data-events/*.jsonl" \
   --exclude "__pycache__" \
   ./ "${JETSON_TARGET}:${REMOTE_DIR}/"
 

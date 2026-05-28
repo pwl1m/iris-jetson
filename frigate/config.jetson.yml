@@ -1,5 +1,5 @@
 mqtt:
-  host: mosquitto
+  host: iris-mosquitto
   port: 1883
   topic_prefix: frigate
 
@@ -8,13 +8,13 @@ ffmpeg:
 
 go2rtc:
   streams:
-    usb_camera: rtsp://go2rtc:8554/usb_camera
+    usb_camera: rtsp://iris-go2rtc:8554/usb_camera
 
 cameras:
   entrada:
     ffmpeg:
       inputs:
-        - path: rtsp://go2rtc:8554/usb_camera
+        - path: rtsp://iris-go2rtc:8554/usb_camera
           input_args: preset-rtsp-restream
           roles:
             - detect

@@ -1,20 +1,20 @@
 services:
-  mosquitto:
+  iris-mosquitto:
     image: eclipse-mosquitto@sha256:914f529386804c8278a4e581526b9be5e1604df44b30daabc70aa97dcefe5268
-    container_name: vision-mosquitto
+    container_name: iris-mosquitto
     restart: unless-stopped
     ports:
       - "1883:1883"
       - "9001:9001"
     volumes:
-      - ../mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
-      - ../mosquitto/data:/mosquitto/data
+      - ../iris-mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ../iris-mosquitto/data:/mosquitto/data
     networks:
-      - vision-lab
+      - iris-lab
 
-  go2rtc:
+  iris-go2rtc:
     image: alexxit/go2rtc:1.9.14
-    container_name: vision-go2rtc
+    container_name: iris-go2rtc
     restart: unless-stopped
     ports:
       - "1984:1984"
@@ -23,7 +23,7 @@ services:
     env_file:
       - ../.env
     volumes:
-      - ../go2rtc/go2rtc.yaml:/config/go2rtc.yaml:ro
+      - ../iris-go2rtc/go2rtc.yaml:/config/go2rtc.yaml:ro
     devices:
       - "${USB_CAMERA_DEVICE:-/dev/video0}:${USB_CAMERA_DEVICE:-/dev/video0}"
     healthcheck:
@@ -33,13 +33,13 @@ services:
       retries: 6
       start_period: 5s
     networks:
-      - vision-lab
+      - iris-lab
 
-  vision-app:
+  iris-app:
     build:
-      context: ../vision-app
+      context: ../iris-app
       dockerfile: Dockerfile.jetson
-    container_name: vision-app
+    container_name: iris-app
     restart: unless-stopped
     runtime: nvidia
     ports:
@@ -57,7 +57,7 @@ services:
       FACE_CTX_ID: ${FACE_CTX_ID:--1}
       LD_LIBRARY_PATH: /opt/jetson-libs/cuda:/opt/jetson-libs/system
       STREAM_SOURCE_KIND: ${STREAM_SOURCE_KIND:-rtsp}
-      STREAM_URL: ${STREAM_URL:-rtsp://go2rtc:8554/usb_camera}
+      STREAM_URL: ${STREAM_URL:-rtsp://iris-go2rtc:8554/usb_camera}
       STREAM_GST_PIPELINE: ${STREAM_GST_PIPELINE:-}
       STREAM_WORKER_ENABLED: ${STREAM_WORKER_ENABLED:-true}
       STREAM_CAPTURE_INTERVAL_SECONDS: ${STREAM_CAPTURE_INTERVAL_SECONDS:-1.0}
@@ -70,17 +70,17 @@ services:
       STREAM_PREVIEW_JPEG_QUALITY: ${STREAM_PREVIEW_JPEG_QUALITY:-70}
       STREAM_READER_BUFFER_SIZE: ${STREAM_READER_BUFFER_SIZE:-1}
       STREAM_SOURCE_READY_TIMEOUT_SECONDS: ${STREAM_SOURCE_READY_TIMEOUT_SECONDS:-20}
-      STREAM_SOURCE_PROBE_URL: ${STREAM_SOURCE_PROBE_URL:-http://go2rtc:1984/api/streams}
+      STREAM_SOURCE_PROBE_URL: ${STREAM_SOURCE_PROBE_URL:-http://iris-go2rtc:1984/api/streams}
       USB_CAMERA_DEVICE: ${USB_CAMERA_DEVICE:-/dev/video0}
       USB_CAMERA_INPUT_FORMAT: ${USB_CAMERA_INPUT_FORMAT:-mjpeg}
       USB_CAMERA_WIDTH: ${USB_CAMERA_WIDTH:-1280}
       USB_CAMERA_HEIGHT: ${USB_CAMERA_HEIGHT:-720}
       USB_CAMERA_FPS: ${USB_CAMERA_FPS:-15}
     volumes:
-      - ../vision-app/data-faces:/data/faces
-      - ../vision-app/data-events:/data/events
-      - ../vision-app/models:/models/face
-      - ../vision-app/samples:/samples
+      - ../iris-app/data-faces:/data/faces
+      - ../iris-app/data-events:/data/events
+      - ../iris-app/models:/models/face
+      - ../iris-app/samples:/samples
       - /usr/local/cuda/targets/aarch64-linux/lib:/opt/jetson-libs/cuda:ro
       - ../runtime-libs:/opt/jetson-libs/system:ro
       - /usr/lib/aarch64-linux-gnu/gstreamer-1.0:/usr/lib/aarch64-linux-gnu/gstreamer-1.0:ro
@@ -88,12 +88,12 @@ services:
     devices:
       - "${USB_CAMERA_DEVICE:-/dev/video0}:${USB_CAMERA_DEVICE:-/dev/video0}"
     depends_on:
-      go2rtc:
+      iris-go2rtc:
         condition: service_healthy
     networks:
-      - vision-lab
+      - iris-lab
 
 networks:
-  vision-lab:
-    name: vision-lab
+  iris-lab:
+    name: iris-lab
     driver: bridge

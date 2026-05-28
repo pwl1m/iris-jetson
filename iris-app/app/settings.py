@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     capture_dir: str = "/data/events/captures"
     camera_name: str = "entrada"
     stream_source_kind: str = "rtsp"
-    stream_url: str = "rtsp://go2rtc:8554/usb_camera"
+    stream_url: str = "rtsp://iris-go2rtc:8554/usb_camera"
     stream_gst_pipeline: str = ""
     stream_worker_enabled: bool = True
     stream_capture_interval_seconds: float = 1.0
@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     stream_preview_jpeg_quality: int = 70
     stream_reader_buffer_size: int = 1
     stream_source_ready_timeout_seconds: float = 20.0
-    stream_source_probe_url: str = "http://go2rtc:1984/api/streams"
+    stream_source_probe_url: str = "http://iris-go2rtc:1984/api/streams"
     usb_camera_device: str = "/dev/video0"
     usb_camera_input_format: str = "mjpeg"
     usb_camera_width: int = 1280

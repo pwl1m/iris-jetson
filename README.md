@@ -5,11 +5,11 @@ Recorte operacional da stack facial para o NVIDIA Jetson Orin Nano. Esta pasta f
 ## Conteudo
 
 - `compose/`: compose do Jetson.
-- `go2rtc/`: configuracao da camera USB/restream.
-- `mosquitto/`: broker MQTT e persistencia local.
+- `iris-go2rtc/`: configuracao da camera USB/restream.
+- `iris-mosquitto/`: broker MQTT e persistencia local.
 - `scripts/`: instalacao, preflight, subida e testes do runtime.
 - `scripts/prepull_images.sh`: pre-pull manual das imagens para reduzir tempo no primeiro `up`.
-- `vision-app/`: API facial, worker de stream, embeddings, eventos e modelos.
+- `iris-app/`: API facial, worker de stream, embeddings, eventos e modelos.
 - `.env.example`: contrato de configuracao local.
 
 ## Subir No Jetson
@@ -61,9 +61,9 @@ Segredos opcionais:
 - evitar reintroduzir fluxo de notebook aqui
 - registrar mudancas de modelo em `../docs/DECISIONS.md` e `../docs/MODEL_PLAN.md`
 
-No fluxo atual, o `vision-app` consome stream do `go2rtc` diretamente e registra eventos/capturas locais para debug operacional.
+No fluxo atual, o `iris-app` consome stream do `iris-go2rtc` diretamente e registra eventos/capturas locais para debug operacional.
 
-Existe agora uma variante experimental para Jetson em que o `vision-app` pode consumir a camera USB diretamente por GStreamer/NVIDIA, sem depender do RTSP interno para inferencia.
+Existe agora uma variante experimental para Jetson em que o `iris-app` pode consumir a camera USB diretamente por GStreamer/NVIDIA, sem depender do RTSP interno para inferencia.
 
 ## Perfil Base Da C930e
 

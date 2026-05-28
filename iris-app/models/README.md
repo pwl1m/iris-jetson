@@ -1,6 +1,6 @@
 # Face Models
 
-O `vision-app` usa InsightFace inicialmente.
+O `iris-app` usa InsightFace inicialmente.
 
 Modelo inicial:
 

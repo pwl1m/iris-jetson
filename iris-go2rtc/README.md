@@ -1,4 +1,4 @@
-# go2rtc
+# iris-go2rtc
 
 Entrada e restream da camera USB para o Frigate.
 

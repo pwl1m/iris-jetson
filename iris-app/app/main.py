@@ -12,7 +12,7 @@ _DOCS_HTML = """\
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Vision App — API</title>
+<title>Iris App — API</title>
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
   body{font-family:monospace;background:#0d0d0d;color:#e0e0e0;padding:2rem}
@@ -36,7 +36,7 @@ _DOCS_HTML = """\
 </head>
 <body>
 
-<h1>Vision App</h1>
+<h1>Iris App</h1>
 <div class="version">v0.2.0 &mdash; FastAPI · InsightFace buffalo_s · SQLite</div>
 
 <div class="endpoint">
@@ -183,7 +183,7 @@ _DASHBOARD_HTML = """\
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Vision App</title>
+<title>Iris App</title>
 <style>
   *{box-sizing:border-box}
   body{margin:0;background:#101214;color:#e7e9ea;font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
@@ -234,7 +234,7 @@ _DASHBOARD_HTML = """\
 </head>
 <body>
 <header>
-  <h1>Vision App</h1>
+  <h1>Iris App</h1>
   <div class="pill" id="runtime">carregando</div>
 </header>
 <main>
@@ -475,7 +475,7 @@ async def lifespan(app: FastAPI):
         runtime.stop()
 
 
-app = FastAPI(title="Vision App", version="0.2.0", lifespan=lifespan)
+app = FastAPI(title="Iris App", version="0.2.0", lifespan=lifespan)
 
 
 @app.get("/", response_class=HTMLResponse, include_in_schema=False)
