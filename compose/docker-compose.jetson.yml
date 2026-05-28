@@ -55,6 +55,8 @@ services:
       FACE_DET_SIZE: ${FACE_DET_SIZE:-480,480}
       FACE_PROVIDERS: ${FACE_PROVIDERS:-TensorrtExecutionProvider,CUDAExecutionProvider,CPUExecutionProvider}
       FACE_CTX_ID: ${FACE_CTX_ID:--1}
+      FACE_TRT_FP16: ${FACE_TRT_FP16:-false}
+      FACE_TRT_ENGINE_CACHE_PATH: ${FACE_TRT_ENGINE_CACHE_PATH:-}
       LD_LIBRARY_PATH: /opt/jetson-libs/cuda:/opt/jetson-libs/system
       STREAM_SOURCE_KIND: ${STREAM_SOURCE_KIND:-rtsp}
       STREAM_URL: ${STREAM_URL:-rtsp://iris-go2rtc:8554/usb_camera}
@@ -81,6 +83,7 @@ services:
       - ../iris-app/data-events:/data/events
       - ../iris-app/models:/models/face
       - ../iris-app/samples:/samples
+      - ../iris-app/trt-engines:/data/trt-engines
       - /usr/local/cuda/targets/aarch64-linux/lib:/opt/jetson-libs/cuda:ro
       - ../runtime-libs:/opt/jetson-libs/system:ro
       - /usr/lib/aarch64-linux-gnu/gstreamer-1.0:/usr/lib/aarch64-linux-gnu/gstreamer-1.0:ro

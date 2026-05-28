@@ -8,6 +8,7 @@ iris-app/models/**/*.zip
 iris-app/models/**/*.onnx
 iris-app/models/**/*.params
 iris-app/models/**/*.bin
+iris-app/trt-engines/
 frigate/models/**/*.trt
 frigate/models/**/*.engine
 __pycache__/
