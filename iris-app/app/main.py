@@ -322,6 +322,9 @@ _DASHBOARD_HTML = """\
         <div class="result panel-body" id="uploadCompareResult">
           <div class="row"><span class="key">status</span><span class="val">-</span></div>
         </div>
+        <div class="panel-body" id="uploadCompareCandidates">
+          <div class="empty">sem candidatos</div>
+        </div>
       </div>
     </div>
   </section>
@@ -385,6 +388,28 @@ function setResultBox(targetId, rows) {
   `).join("");
 }
 
+function setCandidatesBox(targetId, candidates) {
+  const target = document.getElementById(targetId);
+  if (!candidates || !candidates.length) {
+    target.innerHTML = `<div class="empty">sem candidatos</div>`;
+    return;
+  }
+  target.innerHTML = `
+    <table>
+      <thead><tr><th>subject</th><th>similarity</th><th>source</th></tr></thead>
+      <tbody>
+        ${candidates.map(candidate => `
+          <tr>
+            <td>${candidate.subject || "-"}</td>
+            <td>${fixed(candidate.similarity)}</td>
+            <td>${candidate.source || "-"}</td>
+          </tr>
+        `).join("")}
+      </tbody>
+    </table>
+  `;
+}
+
 function drawDetectedCrop(previewId, canvasId, emptyId, bbox) {
   const image = document.getElementById(previewId);
   const canvas = document.getElementById(canvasId);
@@ -444,6 +469,7 @@ async function uploadCompare() {
   const detector = payload.detector || {};
   const recognition = payload.recognition || {};
   const quality = payload.quality || {};
+  const candidates = recognition.candidates || [];
   const statusClass = recognition.status === "matched" ? "matched" : "no-match";
   setResultBox("uploadCompareResult", [
     ["status", recognition.status || "-", statusClass],
@@ -453,6 +479,7 @@ async function uploadCompare() {
     ["quality", quality.accepted ? "accepted" : (quality.reason || "rejected"), quality.accepted ? "matched" : "no-match"],
     ["bbox", detector.bbox ? detector.bbox.map(v => Number(v).toFixed(1)).join(", ") : "-", ""],
   ]);
+  setCandidatesBox("uploadCompareCandidates", candidates);
   drawDetectedCrop("uploadComparePreview", "uploadCompareCrop", "uploadCompareCropEmpty", detector.bbox);
 }
 
