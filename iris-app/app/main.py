@@ -220,6 +220,14 @@ _DASHBOARD_HTML = """\
   .sample img{width:100%;aspect-ratio:4/3;object-fit:cover;background:#08090a;display:block}
   .sample-body{padding:8px;display:grid;gap:6px}
   .sample-id{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;color:#9aa3ad;overflow-wrap:anywhere}
+  .upload-grid{display:grid;grid-template-columns:minmax(320px,1fr) minmax(320px,1fr);gap:16px;padding:16px}
+  .upload-stack{display:grid;gap:12px}
+  .upload-preview{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .preview-box{border:1px solid #292f35;border-radius:6px;background:#111417;overflow:hidden}
+  .preview-box img,.preview-box canvas{width:100%;aspect-ratio:4/3;object-fit:contain;background:#08090a;display:block}
+  .preview-box .empty{aspect-ratio:4/3;display:flex;align-items:center;justify-content:center}
+  .panel-body{padding:12px}
+  .muted{color:#8e98a3;font-size:12px}
   table{width:100%;border-collapse:collapse;font-size:13px}
   th,td{text-align:left;padding:9px 10px;border-bottom:1px solid #252a2f;vertical-align:top}
   th{position:sticky;top:0;background:#171a1e;color:#98a3ad;font-size:11px;text-transform:uppercase;letter-spacing:.04em}
@@ -267,6 +275,57 @@ _DASHBOARD_HTML = """\
     </div>
   </section>
   <section class="panel" style="grid-column:1/-1">
+    <h2>Upload Manual</h2>
+    <div class="upload-grid">
+      <div class="upload-stack">
+        <div class="panel-body" style="padding-bottom:0">
+          <div class="muted">Cadastro manual pelo navegador</div>
+        </div>
+        <div class="controls" style="border-top:0">
+          <input id="uploadEnrollSubject" placeholder="sujeito para cadastrar">
+          <input id="uploadEnrollFile" type="file" accept="image/*">
+          <button id="uploadEnrollButton" type="button">Enviar cadastro</button>
+        </div>
+        <div class="upload-preview">
+          <div class="preview-box">
+            <img id="uploadEnrollPreview" alt="" hidden>
+            <div id="uploadEnrollPreviewEmpty" class="empty">sem imagem</div>
+          </div>
+          <div class="preview-box">
+            <canvas id="uploadEnrollCrop" hidden></canvas>
+            <div id="uploadEnrollCropEmpty" class="empty">sem crop</div>
+          </div>
+        </div>
+        <div class="result panel-body" id="uploadEnrollResult">
+          <div class="row"><span class="key">status</span><span class="val">-</span></div>
+        </div>
+      </div>
+      <div class="upload-stack">
+        <div class="panel-body" style="padding-bottom:0">
+          <div class="muted">Comparacao manual pelo navegador</div>
+        </div>
+        <div class="controls" style="border-top:0">
+          <input id="uploadCompareHint" value="compare" readonly>
+          <input id="uploadCompareFile" type="file" accept="image/*">
+          <button id="uploadCompareButton" type="button">Enviar comparacao</button>
+        </div>
+        <div class="upload-preview">
+          <div class="preview-box">
+            <img id="uploadComparePreview" alt="" hidden>
+            <div id="uploadComparePreviewEmpty" class="empty">sem imagem</div>
+          </div>
+          <div class="preview-box">
+            <canvas id="uploadCompareCrop" hidden></canvas>
+            <div id="uploadCompareCropEmpty" class="empty">sem crop</div>
+          </div>
+        </div>
+        <div class="result panel-body" id="uploadCompareResult">
+          <div class="row"><span class="key">status</span><span class="val">-</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+  <section class="panel" style="grid-column:1/-1">
     <h2>Rostos cadastrados</h2>
     <div class="subjects" id="subjectsList"></div>
   </section>
@@ -293,6 +352,109 @@ let activeSubject = "";
 let streamRunning = false;
 let streamPreviewReady = false;
 let latestFallbackImageUrl = null;
+let enrollUploadUrl = null;
+let compareUploadUrl = null;
+
+function fileToObjectUrl(file) {
+  return file ? URL.createObjectURL(file) : null;
+}
+
+function replaceObjectUrl(currentUrl, file) {
+  if (currentUrl) URL.revokeObjectURL(currentUrl);
+  return fileToObjectUrl(file);
+}
+
+function setPreviewImage(imageId, emptyId, url) {
+  const image = document.getElementById(imageId);
+  const empty = document.getElementById(emptyId);
+  if (!url) {
+    image.hidden = true;
+    empty.hidden = false;
+    image.removeAttribute("src");
+    return;
+  }
+  image.src = url;
+  image.hidden = false;
+  empty.hidden = true;
+}
+
+function setResultBox(targetId, rows) {
+  const target = document.getElementById(targetId);
+  target.innerHTML = rows.map(([key, value, cls]) => `
+    <div class="row"><span class="key">${key}</span><span class="val ${cls || ""}">${value}</span></div>
+  `).join("");
+}
+
+function drawDetectedCrop(previewId, canvasId, emptyId, bbox) {
+  const image = document.getElementById(previewId);
+  const canvas = document.getElementById(canvasId);
+  const empty = document.getElementById(emptyId);
+  if (!bbox || image.naturalWidth === 0 || image.naturalHeight === 0) {
+    canvas.hidden = true;
+    empty.hidden = false;
+    return;
+  }
+  const [x1, y1, x2, y2] = bbox.map(value => Number(value));
+  const width = Math.max(1, Math.round(x2 - x1));
+  const height = Math.max(1, Math.round(y2 - y1));
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  ctx.clearRect(0, 0, width, height);
+  ctx.drawImage(image, x1, y1, width, height, 0, 0, width, height);
+  canvas.hidden = false;
+  empty.hidden = true;
+}
+
+async function uploadEnroll() {
+  const subject = document.getElementById("uploadEnrollSubject").value.trim();
+  const fileInput = document.getElementById("uploadEnrollFile");
+  const file = fileInput.files[0];
+  if (!subject || !file) return;
+  const form = new FormData();
+  form.append("subject", subject);
+  form.append("file", file);
+  const res = await fetch("/enroll", {method: "POST", body: form});
+  const payload = await res.json();
+  if (!res.ok) throw new Error(payload.detail || "falha no cadastro");
+  const face = payload.face || {};
+  setResultBox("uploadEnrollResult", [
+    ["status", payload.status || "-", "matched"],
+    ["subject", payload.subject || "-", ""],
+    ["embedding_id", fmt(payload.embedding_id), ""],
+    ["face score", fixed(face.det_score), ""],
+    ["bbox", face.bbox ? face.bbox.map(v => Number(v).toFixed(1)).join(", ") : "-", ""],
+  ]);
+  drawDetectedCrop("uploadEnrollPreview", "uploadEnrollCrop", "uploadEnrollCropEmpty", face.bbox);
+  activeSubject = subject;
+  document.getElementById("subjectInput").value = subject;
+  await refresh();
+  await refreshSamples();
+}
+
+async function uploadCompare() {
+  const fileInput = document.getElementById("uploadCompareFile");
+  const file = fileInput.files[0];
+  if (!file) return;
+  const form = new FormData();
+  form.append("file", file);
+  const res = await fetch("/compare", {method: "POST", body: form});
+  const payload = await res.json();
+  if (!res.ok) throw new Error(payload.detail || "falha na comparacao");
+  const detector = payload.detector || {};
+  const recognition = payload.recognition || {};
+  const quality = payload.quality || {};
+  const statusClass = recognition.status === "matched" ? "matched" : "no-match";
+  setResultBox("uploadCompareResult", [
+    ["status", recognition.status || "-", statusClass],
+    ["subject", recognition.subject || "-", ""],
+    ["similarity", fixed(recognition.similarity), ""],
+    ["detector score", fixed(detector.score), ""],
+    ["quality", quality.accepted ? "accepted" : (quality.reason || "rejected"), quality.accepted ? "matched" : "no-match"],
+    ["bbox", detector.bbox ? detector.bbox.map(v => Number(v).toFixed(1)).join(", ") : "-", ""],
+  ]);
+  drawDetectedCrop("uploadComparePreview", "uploadCompareCrop", "uploadCompareCropEmpty", detector.bbox);
+}
 
 function selectedSubject() {
   const typed = document.getElementById("subjectInput").value.trim();
@@ -447,6 +609,18 @@ async function refresh() {
 }
 
 document.getElementById("enrollLatest").addEventListener("click", () => enrollLatest().catch(console.error));
+document.getElementById("uploadEnrollButton").addEventListener("click", () => uploadEnroll().catch(console.error));
+document.getElementById("uploadCompareButton").addEventListener("click", () => uploadCompare().catch(console.error));
+document.getElementById("uploadEnrollFile").addEventListener("change", (event) => {
+  enrollUploadUrl = replaceObjectUrl(enrollUploadUrl, event.target.files[0]);
+  setPreviewImage("uploadEnrollPreview", "uploadEnrollPreviewEmpty", enrollUploadUrl);
+  drawDetectedCrop("uploadEnrollPreview", "uploadEnrollCrop", "uploadEnrollCropEmpty", null);
+});
+document.getElementById("uploadCompareFile").addEventListener("change", (event) => {
+  compareUploadUrl = replaceObjectUrl(compareUploadUrl, event.target.files[0]);
+  setPreviewImage("uploadComparePreview", "uploadComparePreviewEmpty", compareUploadUrl);
+  drawDetectedCrop("uploadComparePreview", "uploadCompareCrop", "uploadCompareCropEmpty", null);
+});
 document.getElementById("subjectSelect").addEventListener("change", (event) => {
   if (event.target.value) document.getElementById("subjectInput").value = event.target.value;
   refreshSamples().catch(console.error);
