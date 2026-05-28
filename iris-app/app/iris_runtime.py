@@ -40,7 +40,7 @@ class _GstUsbCapture:
         pipeline = self.settings.stream_gst_pipeline.strip() or self._default_pipeline()
         self._gst = Gst
         self._pipeline = Gst.parse_launch(pipeline)
-        self._sink = self._pipeline.get_by_name("visionappsink")
+        self._sink = self._pipeline.get_by_name("irisappsink")
         if self._sink is None:
             raise RuntimeError("appsink ausente no pipeline GStreamer")
 
@@ -101,18 +101,18 @@ class _GstUsbCapture:
                 "jpegparse ! nvjpegdec ! "
                 "nvvidconv ! video/x-raw,format=BGRx ! "
                 "videoconvert ! video/x-raw,format=BGR ! "
-                "appsink name=visionappsink drop=true max-buffers=1 sync=false"
+                "appsink name=irisappsink drop=true max-buffers=1 sync=false"
             )
 
         return (
             f"v4l2src device={device} io-mode=2 do-timestamp=true ! "
             f"video/x-raw,width={width},height={height},framerate={fps}/1 ! "
             "videoconvert ! video/x-raw,format=BGR ! "
-            "appsink name=visionappsink drop=true max-buffers=1 sync=false"
+            "appsink name=irisappsink drop=true max-buffers=1 sync=false"
         )
 
 
-class VisionRuntime:
+class IrisRuntime:
     def __init__(self, settings: Settings):
         self.settings = settings
         self.logger = logging.getLogger("iris-app")

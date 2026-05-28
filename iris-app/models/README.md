@@ -4,7 +4,7 @@ O `iris-app` usa InsightFace inicialmente.
 
 Modelo inicial:
 
-- `buffalo_s`
+- `buffalo_l`
 
 O pacote InsightFace baixa modelos para este diretorio quando necessario, se houver rede disponivel.
 

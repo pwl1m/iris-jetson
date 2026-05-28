@@ -1,6 +1,6 @@
 # iris-go2rtc
 
-Entrada e restream da camera USB para o Frigate.
+Entrada e restream da camera USB para o `iris-app`.
 
 ## Conteudo
 

@@ -1,6 +1,6 @@
 # iris-mosquitto
 
-Broker MQTT local usado pelo Frigate e pelo `iris-app`.
+Broker MQTT local usado pelo `iris-app` e por integracoes locais.
 
 ## Conteudo
 

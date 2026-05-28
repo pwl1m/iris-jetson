@@ -4,7 +4,7 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, Response
 
 from .settings import settings
-from .vision_runtime import VisionRuntime
+from .iris_runtime import IrisRuntime
 
 _DOCS_HTML = """\
 <!doctype html>
@@ -162,7 +162,7 @@ curl -s "http://localhost:8081/captures?limit=10" | python3 -m json.tool</pre>
 tail -f /data/events/recognitions.jsonl
 
 <span class="comment"># ou via MQTT</span>
-mosquitto_sub -h localhost -p 1884 -t "facial/recognitions"</pre>
+mosquitto_sub -h localhost -p 1883 -t "facial/recognitions"</pre>
 </div>
 
 <div style="margin-top:2rem;color:#333;font-size:.78rem">
@@ -461,7 +461,7 @@ setInterval(() => refresh().catch(console.error), 3000);
 </html>
 """
 
-runtime = VisionRuntime(settings)
+runtime = IrisRuntime(settings)
 
 
 @asynccontextmanager

@@ -62,7 +62,7 @@ Use `GET /debug/engine` para verificar:
 - modo atual (`cpu_only` ou `accelerated`)
 
 No Jetson, o `Dockerfile.jetson` instala `onnxruntime-gpu` do indice `pypi.jetson-ai-lab.io` com fallback de providers definido por `FACE_PROVIDERS`.
-Padrao recomendado atual no Jetson: `FACE_PROVIDERS=CUDAExecutionProvider,CPUExecutionProvider`.
+Padrao recomendado atual no Jetson: `FACE_MODEL_NAME=buffalo_l` e `FACE_PROVIDERS=TensorrtExecutionProvider,CUDAExecutionProvider,CPUExecutionProvider`.
 Para usar GPU no InsightFace, configure `FACE_CTX_ID=0` (valor `-1` forca CPU).
 Antes de subir o stack no Jetson, execute `./scripts/prepare_runtime_libs.sh` para montar cuDNN/TensorRT em `runtime-libs/`.
 O `iris-app` agora espera o `iris-go2rtc` responder no probe `STREAM_SOURCE_PROBE_URL` antes de tentar abrir o RTSP.
