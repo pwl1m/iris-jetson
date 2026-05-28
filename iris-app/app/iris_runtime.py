@@ -101,7 +101,7 @@ class _GstUsbCapture:
             return (
                 f"v4l2src device={device} io-mode=2 do-timestamp=true ! "
                 f"image/jpeg,width={width},height={height},framerate={fps}/1 ! "
-                "jpegparse ! nvjpegdec ! "
+                "jpegparse ! jpegdec ! "
                 "nvvidconv ! video/x-raw,format=BGRx ! "
                 "videoconvert ! video/x-raw,format=BGR ! "
                 "appsink name=irisappsink drop=true max-buffers=1 sync=false"

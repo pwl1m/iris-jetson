@@ -92,7 +92,7 @@ services:
       - "${USB_CAMERA_DEVICE:-/dev/video0}:${USB_CAMERA_DEVICE:-/dev/video0}"
     depends_on:
       iris-go2rtc:
-        condition: service_healthy
+        condition: service_started
     networks:
       - iris-lab
 
