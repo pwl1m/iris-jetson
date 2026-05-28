@@ -12,9 +12,12 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from .cameras import configured_cameras
+from .detector import InsightFaceDetector
+from .pipeline import IrisPipeline
 from .recognizer import InsightFaceRecognizer, cosine_similarity, decode_image
 from .settings import Settings
-from .storage import FaceStore
+from .storage import FaceStore, find_jsonl_event, read_jsonl_tail
 
 
 class _GstUsbCapture:
@@ -123,7 +126,12 @@ class IrisRuntime:
             det_size=settings.det_size_tuple,
             providers=settings.providers_list,
             ctx_id=settings.face_ctx_id,
+            trt_fp16=settings.face_trt_fp16,
+            trt_engine_cache_path=settings.face_trt_engine_cache_path,
         )
+        self.detector = InsightFaceDetector(self.recognizer, crop_padding=settings.pipeline_face_crop_padding)
+        self.pipeline = IrisPipeline(settings, self.detector, self.store)
+        self.cameras = configured_cameras(settings)
         self._stop_event = threading.Event()
         self._stream_thread: threading.Thread | None = None
         self._recognizer_lock = threading.RLock()
@@ -210,6 +218,127 @@ class IrisRuntime:
         return self.recognize_image(decode_image(payload))
 
     def recognize_image(self, image: np.ndarray) -> dict:
+        detection, quality, recognition = self.pipeline.analyze_frame(image)
+        return {
+            **recognition,
+            "quality": quality,
+            "detector": self.detector_status(),
+            "face": detection.metadata,
+        }
+
+    def compare_bytes(self, payload: bytes) -> dict:
+        image = decode_image(payload)
+        detection, quality, recognition = self.pipeline.analyze_frame(image)
+        return {
+            "camera_id": self.settings.camera_1_id,
+            "detector": {
+                **self.detector_status(),
+                "score": detection.det_score,
+                "bbox": detection.bbox,
+            },
+            "quality": quality,
+            "recognition": recognition,
+        }
+
+    def detector_status(self) -> dict:
+        return {
+            "name": "insightface",
+            "model": self.settings.face_model_name,
+            "det_size": self.settings.det_size_tuple,
+            "single_face": self.settings.pipeline_single_face,
+            "crop_padding": self.settings.pipeline_face_crop_padding,
+        }
+
+    def cameras_status(self) -> dict:
+        items = []
+        primary_id = self.settings.camera_1_id
+        stream = self.stream_status()
+        for camera in self.cameras:
+            items.append(
+                {
+                    "camera_id": camera.camera_id,
+                    "enabled": camera.enabled,
+                    "primary": camera.primary,
+                    "stream_url": camera.stream_url,
+                    "active": bool(camera.primary and stream.get("thread_alive")),
+                    "checks_per_second": self.settings.pipeline_checks_per_second,
+                }
+            )
+        return {"cameras": items, "primary_camera_id": primary_id}
+
+    def camera_status(self, camera_id: str) -> dict:
+        for camera in self.cameras:
+            if camera.camera_id == camera_id:
+                return {
+                    "camera": {
+                        **camera.__dict__,
+                        "active": bool(camera.primary and self.stream_status().get("thread_alive")),
+                        "checks_per_second": self.settings.pipeline_checks_per_second,
+                    }
+                }
+        raise KeyError(camera_id)
+
+    def start_camera(self, camera_id: str) -> dict:
+        if camera_id != self.settings.camera_1_id:
+            raise ValueError("camera ainda nao ligada a worker dedicado")
+        return self.start_stream()
+
+    def stop_camera(self, camera_id: str) -> dict:
+        if camera_id != self.settings.camera_1_id:
+            raise ValueError("camera ainda nao ligada a worker dedicado")
+        return self.stop_stream()
+
+    def debug_pipeline(self) -> dict:
+        return {
+            "detector": self.detector_status(),
+            "quality": {
+                "min_det_score": self.settings.face_min_det_score,
+                "min_width": self.settings.face_min_width,
+                "min_height": self.settings.face_min_height,
+                "min_blur_score": self.settings.face_min_blur_score,
+            },
+            "checks_per_second": self.settings.pipeline_checks_per_second,
+            "interval_seconds": self.settings.stream_capture_interval_seconds,
+            "cameras": self.cameras_status()["cameras"],
+            "engine": self.engine_status(),
+        }
+
+    def _recent_events(self, limit: int = 20, camera_id: str | None = None) -> dict:
+        limit = max(1, min(limit, 500))
+        events = read_jsonl_tail(self._event_log(), limit=limit * 5)
+        if camera_id:
+            events = [event for event in events if event.get("camera_id", event.get("camera")) == camera_id]
+        return {"events": events[:limit]}
+
+    def event_by_id(self, event_id: str) -> dict:
+        event = find_jsonl_event(self._event_log(), event_id)
+        if not event:
+            raise FileNotFoundError(event_id)
+        return {"event": event}
+
+    def face_image_path(self, event_id: str) -> Path:
+        event = find_jsonl_event(self._event_log(), event_id)
+        if not event or not event.get("face_image_path"):
+            raise FileNotFoundError(event_id)
+        path = Path(event["face_image_path"])
+        if not path.exists():
+            raise FileNotFoundError(event_id)
+        return path
+
+    def frame_image_path(self, event_id: str) -> Path:
+        event = find_jsonl_event(self._event_log(), event_id)
+        if not event or not event.get("image_path"):
+            raise FileNotFoundError(event_id)
+        path = Path(event["image_path"])
+        if not path.exists():
+            raise FileNotFoundError(event_id)
+        return path
+
+    def enroll_event(self, subject: str, event_id: str) -> dict:
+        path = self.face_image_path(event_id)
+        return self.enroll(subject=subject, filename=path.name, payload=path.read_bytes())
+
+    def recognize_image_legacy(self, image: np.ndarray) -> dict:
         with self._recognizer_lock:
             query_embedding, metadata = self.recognizer.extract_best(image)
 
@@ -273,21 +402,13 @@ class IrisRuntime:
         with self._preview_lock:
             return self._latest_preview_jpeg
 
-    def recent_events(self, limit: int = 20) -> dict:
-        limit = max(1, min(limit, 500))
-        path = self._event_log()
-        if not path.exists():
-            return {"events": []}
-
-        rows = path.read_text(encoding="utf-8").splitlines()[-limit:]
-        events = [json.loads(row) for row in rows if row.strip()]
-        events.reverse()
-        return {"events": events}
+    def recent_events(self, limit: int = 20, camera_id: str | None = None) -> dict:
+        return self._recent_events(limit=limit, camera_id=camera_id)
 
     def latest_event(self) -> dict:
         if self._latest_event:
             return {"event": self._latest_event}
-        events = self.recent_events(limit=1)["events"]
+        events = self._recent_events(limit=1, camera_id=None)["events"]
         return {"event": events[0] if events else None}
 
     def capture_image_path(self, capture_id: str) -> Path:
@@ -298,6 +419,11 @@ class IrisRuntime:
 
     def _capture_dir(self) -> Path:
         path = Path(self.settings.capture_dir)
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def _face_dir(self) -> Path:
+        path = Path(self.settings.face_crop_dir)
         path.mkdir(parents=True, exist_ok=True)
         return path
 
@@ -324,6 +450,13 @@ class IrisRuntime:
         ok = cv2.imwrite(str(path), frame, [int(cv2.IMWRITE_JPEG_QUALITY), self.settings.stream_jpeg_quality])
         if not ok:
             raise RuntimeError(f"falha ao salvar captura: {path}")
+        return path
+
+    def _save_face_crop(self, event_id: str, crop: np.ndarray) -> Path:
+        path = self._face_dir() / f"{event_id}.jpg"
+        ok = cv2.imwrite(str(path), crop, [int(cv2.IMWRITE_JPEG_QUALITY), self.settings.stream_jpeg_quality])
+        if not ok:
+            raise RuntimeError(f"falha ao salvar crop facial: {path}")
         return path
 
     def _now(self) -> str:
@@ -471,34 +604,48 @@ class IrisRuntime:
         self._set_stats(last_capture_at=captured_at)
 
         try:
-            result = self.recognize_image(frame)
-            face_score = float(result["face"].get("det_score") or 0.0)
-            if face_score < self.settings.stream_min_face_score:
+            detection, quality, recognition = self.pipeline.analyze_frame(frame)
+            face_score = float(detection.metadata.get("det_score") or 0.0)
+            if face_score < self.settings.stream_min_face_score or not quality.get("accepted"):
                 return
 
-            capture_id = f"{captured_at.replace(':', '').replace('+', 'Z')}_{capture_number:08d}"
-            image_path = self._save_capture(capture_id, frame)
+            event_id = f"{captured_at.replace(':', '').replace('+', 'Z')}_{capture_number:08d}"
+            image_path = self._save_capture(event_id, frame)
+            face_path = None
+            if self.settings.pipeline_save_face_crop:
+                face_path = self._save_face_crop(event_id, detection.crop)
             if capture_number % 100 == 0:
                 self._prune_captures()
             event = {
-                "capture_id": capture_id,
+                "event_id": event_id,
+                "capture_id": event_id,
                 "capture_number": capture_number,
                 "camera": self.settings.camera_name,
+                "camera_id": self.settings.camera_1_id,
                 "captured_at": captured_at,
                 "image_path": str(image_path),
-                "image_url": f"/captures/{capture_id}/image",
-                "recognition": result,
+                "image_url": f"/captures/{event_id}/image",
+                "frame_image_url": f"/events/{event_id}/frame.jpg",
+                "face_image_path": str(face_path) if face_path else None,
+                "face_image_url": f"/events/{event_id}/face.jpg" if face_path else None,
+                "detector": {
+                    **self.detector_status(),
+                    "score": detection.det_score,
+                    "bbox": detection.bbox,
+                },
+                "quality": quality,
+                "recognition": recognition,
             }
             self._write_event(event)
             self._latest_event = event
             self._increment_stat("events_written")
             self._set_stats(last_event_at=captured_at, last_error=None)
             self.logger.info(
-                "capture=%s status=%s subject=%s similarity=%s",
-                capture_id,
-                result.get("status"),
-                result.get("subject"),
-                result.get("similarity"),
+                "event=%s status=%s subject=%s similarity=%s",
+                event_id,
+                recognition.get("status"),
+                recognition.get("subject"),
+                recognition.get("similarity"),
             )
         except ValueError as exc:
             self._increment_stat("recognition_errors")
@@ -519,3 +666,9 @@ class IrisRuntime:
                 old_file.unlink()
             except OSError:
                 self.logger.warning("failed to remove old capture %s", old_file)
+        face_files = sorted(self._face_dir().glob("*.jpg"), key=lambda item: item.stat().st_mtime, reverse=True)
+        for old_file in face_files[max_files:]:
+            try:
+                old_file.unlink()
+            except OSError:
+                self.logger.warning("failed to remove old face crop %s", old_file)

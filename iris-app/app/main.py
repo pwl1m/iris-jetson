@@ -496,6 +496,40 @@ def debug_engine() -> dict:
     return runtime.engine_status()
 
 
+@app.get("/debug/pipeline")
+def debug_pipeline() -> dict:
+    return runtime.debug_pipeline()
+
+
+@app.get("/cameras")
+def cameras() -> dict:
+    return runtime.cameras_status()
+
+
+@app.get("/cameras/{camera_id}/status")
+def camera_status(camera_id: str) -> dict:
+    try:
+        return runtime.camera_status(camera_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="camera nao encontrada") from exc
+
+
+@app.post("/cameras/{camera_id}/start")
+def camera_start(camera_id: str) -> dict:
+    try:
+        return runtime.start_camera(camera_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.post("/cameras/{camera_id}/stop")
+def camera_stop(camera_id: str) -> dict:
+    try:
+        return runtime.stop_camera(camera_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 @app.get("/subjects")
 def subjects() -> dict:
     return runtime.subjects()
@@ -549,6 +583,35 @@ def capture_image(capture_id: str) -> FileResponse:
         raise HTTPException(status_code=404, detail="captura nao encontrada") from exc
 
 
+@app.get("/events")
+def events(limit: int = 20, camera_id: str | None = None) -> dict:
+    return runtime.recent_events(limit=limit, camera_id=camera_id)
+
+
+@app.get("/events/{event_id}")
+def event_by_id(event_id: str) -> dict:
+    try:
+        return runtime.event_by_id(event_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="evento nao encontrado") from exc
+
+
+@app.get("/events/{event_id}/frame.jpg")
+def event_frame_image(event_id: str) -> FileResponse:
+    try:
+        return FileResponse(runtime.frame_image_path(event_id), media_type="image/jpeg")
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="frame do evento nao encontrado") from exc
+
+
+@app.get("/events/{event_id}/face.jpg")
+def event_face_image(event_id: str) -> FileResponse:
+    try:
+        return FileResponse(runtime.face_image_path(event_id), media_type="image/jpeg")
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="crop facial nao encontrado") from exc
+
+
 @app.get("/preview/latest.jpg")
 def latest_preview_image() -> Response:
     payload = runtime.latest_preview_jpeg()
@@ -567,6 +630,16 @@ def enroll_capture(capture_id: str, subject: str) -> dict:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
+@app.post("/events/{event_id}/enroll")
+def enroll_event(event_id: str, subject: str) -> dict:
+    try:
+        return runtime.enroll_event(subject=subject, event_id=event_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="crop facial nao encontrado") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @app.post("/enroll")
 async def enroll(subject: str = Form(...), file: UploadFile = File(...)) -> dict:
     try:
@@ -579,5 +652,13 @@ async def enroll(subject: str = Form(...), file: UploadFile = File(...)) -> dict
 async def recognize(file: UploadFile = File(...)) -> dict:
     try:
         return runtime.recognize_bytes(await file.read())
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/compare")
+async def compare(file: UploadFile = File(...)) -> dict:
+    try:
+        return runtime.compare_bytes(await file.read())
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

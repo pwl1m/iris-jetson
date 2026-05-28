@@ -81,3 +81,26 @@ class FaceStore:
             rows = conn.execute("SELECT subject, embedding, source FROM face_embeddings").fetchall()
         for row in rows:
             yield row["subject"], np.asarray(json.loads(row["embedding"]), dtype=np.float32), row["source"]
+
+
+def read_jsonl_tail(path: Path, limit: int) -> list[dict]:
+    if not path.exists():
+        return []
+    rows = path.read_text(encoding="utf-8").splitlines()[-limit:]
+    events = [json.loads(row) for row in rows if row.strip()]
+    events.reverse()
+    return events
+
+
+def find_jsonl_event(path: Path, event_id: str) -> dict | None:
+    if not path.exists():
+        return None
+    for row in reversed(path.read_text(encoding="utf-8").splitlines()):
+        if not row.strip():
+            continue
+        event = json.loads(row)
+        if event.get("event_id") == event_id:
+            return event
+        if event.get("capture_id") == event_id:
+            return event
+    return None

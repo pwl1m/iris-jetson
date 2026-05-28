@@ -10,10 +10,13 @@ class Settings(BaseSettings):
     face_similarity_threshold: float = 0.55
     face_max_results: int = 5
     face_providers: str = "CPUExecutionProvider"
+    face_trt_fp16: bool = False
+    face_trt_engine_cache_path: str = ""
 
     worker_log_level: str = "INFO"
     event_log_path: str = "/data/events/recognitions.jsonl"
     capture_dir: str = "/data/events/captures"
+    face_crop_dir: str = "/data/events/faces"
     camera_name: str = "entrada"
     stream_source_kind: str = "rtsp"
     stream_url: str = "rtsp://iris-go2rtc:8554/usb_camera"
@@ -30,6 +33,20 @@ class Settings(BaseSettings):
     stream_reader_buffer_size: int = 1
     stream_source_ready_timeout_seconds: float = 20.0
     stream_source_probe_url: str = "http://iris-go2rtc:1984/api/streams"
+    pipeline_checks_per_second: float = 1.0
+    pipeline_single_face: bool = True
+    pipeline_save_face_crop: bool = True
+    pipeline_face_crop_padding: float = 0.25
+    face_min_det_score: float = 0.65
+    face_min_width: int = 48
+    face_min_height: int = 48
+    face_min_blur_score: float = 40.0
+    camera_1_id: str = "entrada"
+    camera_1_stream_url: str = "rtsp://iris-go2rtc:8554/usb_camera"
+    camera_1_enabled: bool = True
+    camera_2_id: str = "entrada_2"
+    camera_2_stream_url: str = ""
+    camera_2_enabled: bool = False
     usb_camera_device: str = "/dev/video0"
     usb_camera_input_format: str = "mjpeg"
     usb_camera_width: int = 1280
