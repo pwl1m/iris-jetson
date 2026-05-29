@@ -51,7 +51,7 @@ Aplicacao principal da Fase 1: API FastAPI, cadastro facial, reconhecimento e wo
 
 O worker consome `STREAM_URL` (padrao: `rtsp://iris-go2rtc:8554/usb_camera`), processa uma captura a cada `STREAM_CAPTURE_INTERVAL_SECONDS`, salva imagens em `CAPTURE_DIR` e grava eventos em `EVENT_LOG_PATH`.
 
-O pipeline atual ja separa detector, filtro de qualidade, crop de rosto e reconhecimento `buffalo_l`, conforme o plano em `../../docs/IRIS_PIPELINE_PLAN_2026-05-29.md`.
+O pipeline atual ja separa detector, filtro de qualidade, crop de rosto e reconhecimento `buffalo_m`, conforme o plano em `../../docs/IRIS_PIPELINE_PLAN_2026-05-29.md`.
 
 No Jetson, o worker tambem pode operar com `STREAM_SOURCE_KIND=jetson_gst_usb`, abrindo a camera USB diretamente por GStreamer com `nvv4l2decoder` e `appsink`.
 Nesse modo, `STREAM_URL` deixa de ser a fonte primaria de inferencia e passa a servir apenas como fallback/observabilidade externa.
@@ -88,7 +88,7 @@ Use `GET /debug/engine` para verificar:
 - modo atual (`cpu_only` ou `accelerated`)
 
 No Jetson, o `Dockerfile.jetson` instala `onnxruntime-gpu` do indice `pypi.jetson-ai-lab.io` com fallback de providers definido por `FACE_PROVIDERS`.
-Padrao recomendado atual no Jetson: `FACE_MODEL_NAME=buffalo_l` e `FACE_PROVIDERS=TensorrtExecutionProvider,CUDAExecutionProvider,CPUExecutionProvider`.
+Padrao recomendado atual no Jetson: `FACE_MODEL_NAME=buffalo_m` e `FACE_PROVIDERS=TensorrtExecutionProvider,CUDAExecutionProvider,CPUExecutionProvider`.
 Para usar GPU no InsightFace, configure `FACE_CTX_ID=0` (valor `-1` forca CPU).
 Ative `FACE_TRT_FP16=true` e `FACE_TRT_ENGINE_CACHE_PATH=/data/trt-engines` para reaproveitar engines TensorRT entre reinicios.
 Antes de subir o stack no Jetson, execute `./scripts/prepare_runtime_libs.sh` para montar cuDNN/TensorRT em `runtime-libs/`.
