@@ -562,7 +562,13 @@ class IrisRuntime:
 
     def _open_capture(self):
         if self.settings.stream_source_kind_normalized == "jetson_gst_usb":
-            return cv2.VideoCapture(self.settings.usb_camera_device, cv2.CAP_V4L2)
+            capture = cv2.VideoCapture(self.settings.usb_camera_device, cv2.CAP_V4L2)
+            if self.settings.usb_camera_input_format.strip().lower() in {"mjpeg", "mjpg"}:
+                capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+            capture.set(cv2.CAP_PROP_FRAME_WIDTH, float(self.settings.usb_camera_width))
+            capture.set(cv2.CAP_PROP_FRAME_HEIGHT, float(self.settings.usb_camera_height))
+            capture.set(cv2.CAP_PROP_FPS, float(self.settings.usb_camera_fps))
+            return capture
 
         return cv2.VideoCapture(self.settings.stream_url, cv2.CAP_FFMPEG)
 
