@@ -32,8 +32,8 @@ services:
       FACE_DET_SIZE: ${FACE_DET_SIZE:-480,480}
       FACE_PROVIDERS: ${FACE_PROVIDERS:-TensorrtExecutionProvider,CUDAExecutionProvider,CPUExecutionProvider}
       FACE_CTX_ID: ${FACE_CTX_ID:--1}
-      FACE_TRT_FP16: ${FACE_TRT_FP16:-false}
-      FACE_TRT_ENGINE_CACHE_PATH: ${FACE_TRT_ENGINE_CACHE_PATH:-}
+      FACE_TRT_FP16: ${FACE_TRT_FP16:-true}
+      FACE_TRT_ENGINE_CACHE_PATH: ${FACE_TRT_ENGINE_CACHE_PATH:-/data/trt-engines}
       LD_LIBRARY_PATH: /opt/jetson-libs/cuda:/opt/jetson-libs/system
       STREAM_SOURCE_KIND: ${STREAM_SOURCE_KIND:-jetson_gst_usb}
       STREAM_URL: ${STREAM_URL:-rtsp://iris-go2rtc:8554/usb_camera}

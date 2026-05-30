@@ -64,7 +64,10 @@ class InsightFaceRecognizer:
                 provider_options.append(trt_opts)
             else:
                 provider_options.append({})
-        kwargs = {"providers": providers}
+        kwargs = {
+            "providers": providers,
+            "allowed_modules": ["detection", "recognition", "landmark_2d_106"],
+        }
         if any(opts for opts in provider_options):
             kwargs["provider_options"] = provider_options
         self.app = FaceAnalysis(name=model_name, root=model_root, **kwargs)

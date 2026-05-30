@@ -62,7 +62,7 @@ class _GstUsbCapture:
         if not self._opened or self._sink is None or self._gst is None:
             return False, None
 
-        sample = self._sink.emit("pull-sample")
+        sample = self._sink.emit("try-pull-sample", int(1e9))
         if sample is None:
             return False, None
 
@@ -449,14 +449,22 @@ class IrisRuntime:
 
     def _save_capture(self, capture_id: str, frame: np.ndarray) -> Path:
         path = self._capture_dir() / f"{capture_id}.jpg"
-        ok = cv2.imwrite(str(path), frame, [int(cv2.IMWRITE_JPEG_QUALITY), self.settings.stream_jpeg_quality])
+        ok = cv2.imwrite(str(path), frame, [
+            int(cv2.IMWRITE_JPEG_QUALITY), self.settings.stream_jpeg_quality,
+            int(cv2.IMWRITE_JPEG_OPTIMIZE), 1,
+            int(cv2.IMWRITE_JPEG_PROGRESSIVE), 0,
+        ])
         if not ok:
             raise RuntimeError(f"falha ao salvar captura: {path}")
         return path
 
     def _save_face_crop(self, event_id: str, crop: np.ndarray) -> Path:
         path = self._face_dir() / f"{event_id}.jpg"
-        ok = cv2.imwrite(str(path), crop, [int(cv2.IMWRITE_JPEG_QUALITY), self.settings.stream_jpeg_quality])
+        ok = cv2.imwrite(str(path), crop, [
+            int(cv2.IMWRITE_JPEG_QUALITY), self.settings.stream_jpeg_quality,
+            int(cv2.IMWRITE_JPEG_OPTIMIZE), 1,
+            int(cv2.IMWRITE_JPEG_PROGRESSIVE), 0,
+        ])
         if not ok:
             raise RuntimeError(f"falha ao salvar crop facial: {path}")
         return path
@@ -562,12 +570,16 @@ class IrisRuntime:
 
     def _open_capture(self):
         if self.settings.stream_source_kind_normalized == "jetson_gst_usb":
-            capture = cv2.VideoCapture(self.settings.usb_camera_device, cv2.CAP_V4L2)
-            if self.settings.usb_camera_input_format.strip().lower() in {"mjpeg", "mjpg"}:
-                capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
-            capture.set(cv2.CAP_PROP_FRAME_WIDTH, float(self.settings.usb_camera_width))
-            capture.set(cv2.CAP_PROP_FRAME_HEIGHT, float(self.settings.usb_camera_height))
-            capture.set(cv2.CAP_PROP_FPS, float(self.settings.usb_camera_fps))
+            capture = _GstUsbCapture(self.settings)
+            try:
+                opened = capture.open()
+            except Exception as exc:
+                self.logger.exception("failed to open gst usb capture: %s", exc)
+                self._set_stats(last_error=f"falha ao abrir gst usb: {exc}")
+                capture.release()
+                return capture
+            if not opened:
+                self._set_stats(last_error="falha ao abrir gst usb")
             return capture
 
         return cv2.VideoCapture(self.settings.stream_url, cv2.CAP_FFMPEG)
@@ -587,7 +599,11 @@ class IrisRuntime:
         ok, encoded = cv2.imencode(
             ".jpg",
             preview,
-            [int(cv2.IMWRITE_JPEG_QUALITY), int(self.settings.stream_preview_jpeg_quality)],
+            [
+                int(cv2.IMWRITE_JPEG_QUALITY), int(self.settings.stream_preview_jpeg_quality),
+                int(cv2.IMWRITE_JPEG_OPTIMIZE), 1,
+                int(cv2.IMWRITE_JPEG_PROGRESSIVE), 0,
+            ],
         )
         if not ok:
             return
