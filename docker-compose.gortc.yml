@@ -55,8 +55,8 @@ services:
       FACE_DET_SIZE: ${FACE_DET_SIZE:-480,480}
       FACE_PROVIDERS: ${FACE_PROVIDERS:-TensorrtExecutionProvider,CUDAExecutionProvider,CPUExecutionProvider}
       FACE_CTX_ID: ${FACE_CTX_ID:--1}
-      FACE_TRT_FP16: ${FACE_TRT_FP16:-false}
-      FACE_TRT_ENGINE_CACHE_PATH: ${FACE_TRT_ENGINE_CACHE_PATH:-}
+      FACE_TRT_FP16: ${FACE_TRT_FP16:-true}
+      FACE_TRT_ENGINE_CACHE_PATH: ${FACE_TRT_ENGINE_CACHE_PATH:-/data/trt-engines}
       LD_LIBRARY_PATH: /opt/jetson-libs/cuda:/opt/jetson-libs/system
       STREAM_SOURCE_KIND: ${STREAM_SOURCE_KIND:-gst_rtsp}
       STREAM_URL: ${STREAM_URL:-rtsp://iris-go2rtc:8554/usb_camera}
@@ -75,8 +75,8 @@ services:
       STREAM_SOURCE_PROBE_URL: ${STREAM_SOURCE_PROBE_URL:-http://iris-go2rtc:1984/api/streams}
       USB_CAMERA_DEVICE: ${USB_CAMERA_DEVICE:-/dev/video0}
       USB_CAMERA_INPUT_FORMAT: ${USB_CAMERA_INPUT_FORMAT:-mjpeg}
-      USB_CAMERA_WIDTH: ${USB_CAMERA_WIDTH:-1280}
-      USB_CAMERA_HEIGHT: ${USB_CAMERA_HEIGHT:-720}
+      USB_CAMERA_WIDTH: ${USB_CAMERA_WIDTH:-1920}
+      USB_CAMERA_HEIGHT: ${USB_CAMERA_HEIGHT:-1080}
       USB_CAMERA_FPS: ${USB_CAMERA_FPS:-15}
     volumes:
       - ./iris-app/data-faces:/data/faces

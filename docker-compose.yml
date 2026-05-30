@@ -52,8 +52,8 @@ services:
       STREAM_SOURCE_PROBE_URL: ${STREAM_SOURCE_PROBE_URL:-http://iris-go2rtc:1984/api/streams}
       USB_CAMERA_DEVICE: ${USB_CAMERA_DEVICE:-/dev/video0}
       USB_CAMERA_INPUT_FORMAT: ${USB_CAMERA_INPUT_FORMAT:-mjpeg}
-      USB_CAMERA_WIDTH: ${USB_CAMERA_WIDTH:-1280}
-      USB_CAMERA_HEIGHT: ${USB_CAMERA_HEIGHT:-720}
+      USB_CAMERA_WIDTH: ${USB_CAMERA_WIDTH:-1920}
+      USB_CAMERA_HEIGHT: ${USB_CAMERA_HEIGHT:-1080}
       USB_CAMERA_FPS: ${USB_CAMERA_FPS:-15}
     volumes:
       - ./iris-app/data-faces:/data/faces

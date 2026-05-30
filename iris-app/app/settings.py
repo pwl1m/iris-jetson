@@ -3,15 +3,15 @@ from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     face_db_path: str = "/data/faces/faces.sqlite3"
-    face_model_name: str = "buffalo_l"
+    face_model_name: str = "buffalo_m"
     face_model_root: str = "/models/face"
-    face_det_size: str = "640,640"
+    face_det_size: str = "480,480"
     face_ctx_id: int = 0
     face_similarity_threshold: float = 0.55
     face_max_results: int = 5
-    face_providers: str = "CPUExecutionProvider"
-    face_trt_fp16: bool = False
-    face_trt_engine_cache_path: str = ""
+    face_providers: str = "TensorrtExecutionProvider,CUDAExecutionProvider,CPUExecutionProvider"
+    face_trt_fp16: bool = True
+    face_trt_engine_cache_path: str = "/data/trt-engines"
 
     worker_log_level: str = "INFO"
     event_log_path: str = "/data/events/recognitions.jsonl"
@@ -50,8 +50,8 @@ class Settings(BaseSettings):
     camera_2_enabled: bool = False
     usb_camera_device: str = "/dev/video0"
     usb_camera_input_format: str = "mjpeg"
-    usb_camera_width: int = 1280
-    usb_camera_height: int = 720
+    usb_camera_width: int = 1920
+    usb_camera_height: int = 1080
     usb_camera_fps: int = 15
 
     @property
