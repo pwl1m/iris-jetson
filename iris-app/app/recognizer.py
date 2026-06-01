@@ -58,10 +58,13 @@ class InsightFaceRecognizer:
         if trt_engine_cache_path:
             trt_opts["trt_engine_cache_enable"] = "True"
             trt_opts["trt_engine_cache_path"] = trt_engine_cache_path
+        cuda_opts = {"enable_cuda_graph": "True"}
         provider_options = []
         for provider in providers:
             if "Tensorrt" in provider and trt_opts:
                 provider_options.append(trt_opts)
+            elif "CUDA" in provider and cuda_opts:
+                provider_options.append(cuda_opts)
             else:
                 provider_options.append({})
         kwargs = {
