@@ -11,19 +11,6 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Copy repository to Jetson
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.JETSON_HOST }}
-          username: ${{ secrets.JETSON_USER }}
-          key: ${{ secrets.JETSON_SSH_KEY }}
-          port: ${{ secrets.JETSON_PORT || '22' }}
-          source: ".github,AGENTS.md,README.md,.env.example,.gitignore,docker-compose.yml,iris-app,iris-go2rtc,iris-mosquitto,runtime-libs,scripts"
-          target: ${{ secrets.JETSON_DEPLOY_PATH || '~/iris-jetson' }}
-
       - name: Deploy on Jetson
         uses: appleboy/ssh-action@v1.0.3
         env:

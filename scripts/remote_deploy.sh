@@ -13,6 +13,10 @@ if [ ! -f .env ]; then
   exit 1
 fi
 
+echo "Pulling latest code..."
+git checkout deploy/staging
+git pull origin deploy/staging
+
 ./scripts/jetson_preflight.sh
 ./scripts/compose_jetson_up.sh
 
