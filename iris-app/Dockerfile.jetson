@@ -32,11 +32,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-COPY requirements.jetson.txt .
+COPY requirements.jetson.txt requirements.jetson.lock ./
 RUN python3 -m pip install --no-cache-dir \
     --extra-index-url https://pypi.jetson-ai-lab.io/jp6/cu126/+simple \
     onnxruntime-gpu==1.24.0 \
-    && python3 -m pip install --no-cache-dir -r requirements.jetson.txt
+    && python3 -m pip install --no-cache-dir -r requirements.jetson.lock
 
 COPY app ./app
 
