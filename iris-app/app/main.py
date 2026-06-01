@@ -726,8 +726,44 @@ def debug_pipeline() -> dict:
 
 
 @app.get("/occlusions")
-def occlusions(limit: int = 50) -> dict:
-    return runtime.recent_occlusions(limit=limit)
+def occlusions(
+    limit: int = 50,
+    since: str | None = None,
+    camera_id: str | None = None,
+    recognition_status: str | None = None,
+    occlusion_class: str | None = None,
+) -> dict:
+    return runtime.recent_occlusions(
+        limit=limit,
+        since=since,
+        camera_id=camera_id,
+        recognition_status=recognition_status,
+        occlusion_class=occlusion_class,
+    )
+
+
+@app.get("/occlusions/{event_id}")
+def occlusion_by_id(event_id: str) -> dict:
+    try:
+        return runtime.occlusion_by_id(event_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="evento de oclusao nao encontrado") from exc
+
+
+@app.get("/occlusions/{event_id}/frame.jpg")
+def occlusion_frame_image(event_id: str) -> FileResponse:
+    try:
+        return FileResponse(runtime.occlusion_frame_image_path(event_id), media_type="image/jpeg")
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="frame da oclusao nao encontrado") from exc
+
+
+@app.get("/occlusions/{event_id}/face.jpg")
+def occlusion_face_image(event_id: str) -> FileResponse:
+    try:
+        return FileResponse(runtime.occlusion_face_image_path(event_id), media_type="image/jpeg")
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="crop facial da oclusao nao encontrado") from exc
 
 
 @app.get("/cameras")
@@ -795,8 +831,8 @@ def stream_stop() -> dict:
 
 
 @app.get("/captures")
-def captures(limit: int = 20) -> dict:
-    return runtime.recent_events(limit=limit)
+def captures(limit: int = 20, since: str | None = None) -> dict:
+    return runtime.recent_events(limit=limit, since=since)
 
 
 @app.get("/captures/latest")
@@ -813,8 +849,8 @@ def capture_image(capture_id: str) -> FileResponse:
 
 
 @app.get("/events")
-def events(limit: int = 20, camera_id: str | None = None) -> dict:
-    return runtime.recent_events(limit=limit, camera_id=camera_id)
+def events(limit: int = 20, camera_id: str | None = None, since: str | None = None) -> dict:
+    return runtime.recent_events(limit=limit, camera_id=camera_id, since=since)
 
 
 @app.get("/events/{event_id}")

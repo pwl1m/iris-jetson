@@ -17,7 +17,7 @@ from .detector import InsightFaceDetector
 from .pipeline import IrisPipeline
 from .recognizer import InsightFaceRecognizer, cosine_similarity, decode_image
 from .settings import Settings
-from .storage import FaceStore, find_jsonl_event, read_jsonl_tail
+from .storage import FaceStore, find_jsonl_event, read_jsonl_events
 
 
 class _GstUsbCapture:
@@ -141,8 +141,10 @@ class IrisRuntime:
             "running": False,
             "captures_seen": 0,
             "events_written": 0,
+            "occlusions_written": 0,
             "frames_read": 0,
             "recognition_errors": 0,
+            "last_occlusion_at": None,
             "last_capture_at": None,
             "last_event_at": None,
             "last_error": None,
@@ -305,12 +307,17 @@ class IrisRuntime:
             "engine": self.engine_status(),
         }
 
-    def _recent_events(self, limit: int = 20, camera_id: str | None = None) -> dict:
+    def _recent_events(self, limit: int = 20, camera_id: str | None = None, since: str | None = None) -> dict:
         limit = max(1, min(limit, 500))
-        events = read_jsonl_tail(self._event_log(), limit=limit * 5)
-        if camera_id:
-            events = [event for event in events if event.get("camera_id", event.get("camera")) == camera_id]
-        return {"events": events[:limit]}
+
+        def _matches(event: dict) -> bool:
+            if camera_id and event.get("camera_id", event.get("camera")) != camera_id:
+                return False
+            return True
+
+        return {
+            "events": read_jsonl_events(self._event_log(), limit=limit, since=since, predicate=_matches)
+        }
 
     def event_by_id(self, event_id: str) -> dict:
         event = find_jsonl_event(self._event_log(), event_id)
@@ -404,14 +411,61 @@ class IrisRuntime:
         with self._preview_lock:
             return self._latest_preview_jpeg
 
-    def recent_events(self, limit: int = 20, camera_id: str | None = None) -> dict:
-        return self._recent_events(limit=limit, camera_id=camera_id)
+    def recent_events(self, limit: int = 20, camera_id: str | None = None, since: str | None = None) -> dict:
+        return self._recent_events(limit=limit, camera_id=camera_id, since=since)
 
     def latest_event(self) -> dict:
         if self._latest_event:
             return {"event": self._latest_event}
         events = self._recent_events(limit=1, camera_id=None)["events"]
         return {"event": events[0] if events else None}
+
+    def recent_occlusions(
+        self,
+        limit: int = 50,
+        since: str | None = None,
+        camera_id: str | None = None,
+        recognition_status: str | None = None,
+        occlusion_class: str | None = None,
+    ) -> dict:
+        limit = max(1, min(limit, 500))
+
+        def _matches(event: dict) -> bool:
+            if camera_id and event.get("camera_id", event.get("camera")) != camera_id:
+                return False
+            if recognition_status and (event.get("recognition") or {}).get("status") != recognition_status:
+                return False
+            if occlusion_class and event.get("occlusion_class") != occlusion_class:
+                return False
+            return True
+
+        return {
+            "events": read_jsonl_events(self._occlusion_log(), limit=limit, since=since, predicate=_matches)
+        }
+
+    def occlusion_by_id(self, event_id: str) -> dict:
+        event = find_jsonl_event(self._occlusion_log(), event_id)
+        if not event:
+            raise FileNotFoundError(event_id)
+        return {"event": event}
+
+    def occlusion_frame_image_path(self, event_id: str) -> Path:
+        event = find_jsonl_event(self._occlusion_log(), event_id)
+        if not event or not event.get("image_path"):
+            raise FileNotFoundError(event_id)
+        path = Path(event["image_path"])
+        if not path.exists():
+            raise FileNotFoundError(event_id)
+        return path
+
+    def occlusion_face_image_path(self, event_id: str) -> Path:
+        event = find_jsonl_event(self._occlusion_log(), event_id)
+        if not event or not event.get("face_image_path"):
+            raise FileNotFoundError(event_id)
+        path = Path(event["face_image_path"])
+        if not path.exists():
+            raise FileNotFoundError(event_id)
+        return path
 
     def capture_image_path(self, capture_id: str) -> Path:
         candidate = self._capture_dir() / f"{capture_id}.jpg"
@@ -608,13 +662,18 @@ class IrisRuntime:
             self._latest_preview_jpeg = encoded.tobytes()
             self._latest_preview_at = self._now()
 
-    def recent_occlusions(self, limit: int = 50) -> dict:
-        return {"events": read_jsonl_tail(self._occlusion_log(), limit)}
-
     def _occlusion_log(self) -> Path:
         path = Path(self.settings.occlusion_log_path)
         path.parent.mkdir(parents=True, exist_ok=True)
         return path
+
+    def _classify_occlusion(self, recognition: dict) -> str:
+        if recognition.get("status") == "matched" and recognition.get("subject"):
+            return "known_subject_occluded"
+        similarity = recognition.get("similarity")
+        if similarity is not None and float(similarity) >= max(0.0, self.settings.face_similarity_threshold - 0.05):
+            return "low_confidence_occlusion"
+        return "unknown_subject_occluded"
 
     def _write_occlusion(self, entry: dict) -> None:
         with self._occlusion_log().open("a", encoding="utf-8") as output:
@@ -629,21 +688,47 @@ class IrisRuntime:
             detection, quality, recognition = self.pipeline.analyze_frame(frame)
             face_score = float(detection.metadata.get("det_score") or 0.0)
             current_landmarks = int(detection.metadata.get("landmarks_detected") or 0)
+            event_id = f"{captured_at.replace(':', '').replace('+', 'Z')}_{capture_number:08d}"
 
             if quality.get("reason") == "face_ocluida":
                 sudden = self._last_landmarks >= 80 and current_landmarks < 40
+                image_path = self._save_capture(event_id, frame)
+                face_path = None
+                if self.settings.pipeline_save_face_crop:
+                    face_path = self._save_face_crop(event_id, detection.crop)
                 self._write_occlusion({
+                    "event_id": event_id,
+                    "capture_id": event_id,
+                    "capture_number": capture_number,
+                    "event_type": "occlusion",
+                    "occlusion_class": self._classify_occlusion(recognition),
+                    "camera": self.settings.camera_name,
                     "captured_at": captured_at,
                     "camera_id": self.settings.camera_1_id,
-                    "landmarks_detected": current_landmarks,
-                    "total_landmarks": detection.metadata.get("total_landmarks", 0),
-                    "occlusion_ratio": detection.metadata.get("occlusion_ratio", 1.0),
-                    "det_score": detection.det_score,
-                    "bbox": detection.bbox,
-                    "sudden": sudden,
-                    "previous_landmarks": self._last_landmarks,
+                    "image_path": str(image_path),
+                    "image_url": f"/captures/{event_id}/image",
+                    "frame_image_url": f"/occlusions/{event_id}/frame.jpg",
+                    "face_image_path": str(face_path) if face_path else None,
+                    "face_image_url": f"/occlusions/{event_id}/face.jpg" if face_path else None,
+                    "detector": {
+                        **self.detector_status(),
+                        "score": detection.det_score,
+                        "bbox": detection.bbox,
+                    },
+                    "quality": quality,
+                    "recognition": recognition,
+                    "occlusion": {
+                        "landmarks_detected": current_landmarks,
+                        "total_landmarks": detection.metadata.get("total_landmarks", 0),
+                        "occlusion_ratio": detection.metadata.get("occlusion_ratio", 1.0),
+                        "det_score": detection.det_score,
+                        "bbox": detection.bbox,
+                        "sudden": sudden,
+                        "previous_landmarks": self._last_landmarks,
+                    },
                 })
-                self._set_stats(last_error="face_ocluida")
+                self._increment_stat("occlusions_written")
+                self._set_stats(last_error="face_ocluida", last_occlusion_at=captured_at, last_event_at=captured_at)
                 self._last_landmarks = 0
                 return
 
@@ -652,7 +737,6 @@ class IrisRuntime:
                 return
 
             self._last_landmarks = current_landmarks
-            event_id = f"{captured_at.replace(':', '').replace('+', 'Z')}_{capture_number:08d}"
             image_path = self._save_capture(event_id, frame)
             face_path = None
             if self.settings.pipeline_save_face_crop:

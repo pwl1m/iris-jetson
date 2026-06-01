@@ -1,7 +1,7 @@
 import json
 import sqlite3
+from collections.abc import Callable, Iterable
 from pathlib import Path
-from typing import Iterable
 
 import numpy as np
 
@@ -83,13 +83,33 @@ class FaceStore:
             yield row["subject"], np.asarray(json.loads(row["embedding"]), dtype=np.float32), row["source"]
 
 
-def read_jsonl_tail(path: Path, limit: int) -> list[dict]:
+def read_jsonl_events(
+    path: Path,
+    limit: int,
+    *,
+    since: str | None = None,
+    predicate: Callable[[dict], bool] | None = None,
+) -> list[dict]:
     if not path.exists():
         return []
-    rows = path.read_text(encoding="utf-8").splitlines()[-limit:]
-    events = [json.loads(row) for row in rows if row.strip()]
-    events.reverse()
+    events: list[dict] = []
+    for row in reversed(path.read_text(encoding="utf-8").splitlines()):
+        if not row.strip():
+            continue
+        event = json.loads(row)
+        cursor = event.get("event_id") or event.get("capture_id") or event.get("captured_at")
+        if since and cursor is not None and str(cursor) <= since:
+            continue
+        if predicate and not predicate(event):
+            continue
+        events.append(event)
+        if len(events) >= max(1, int(limit)):
+            break
     return events
+
+
+def read_jsonl_tail(path: Path, limit: int) -> list[dict]:
+    return read_jsonl_events(path, limit)
 
 
 def find_jsonl_event(path: Path, event_id: str) -> dict | None:
