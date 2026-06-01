@@ -62,7 +62,7 @@ class _GstUsbCapture:
         if not self._opened or self._sink is None or self._gst is None:
             return False, None
 
-        sample = self._sink.emit("try-pull-sample", int(1e9))
+        sample = self._sink.emit("pull-sample")
         if sample is None:
             return False, None
 
@@ -570,16 +570,12 @@ class IrisRuntime:
 
     def _open_capture(self):
         if self.settings.stream_source_kind_normalized == "jetson_gst_usb":
-            capture = _GstUsbCapture(self.settings)
-            try:
-                opened = capture.open()
-            except Exception as exc:
-                self.logger.exception("failed to open gst usb capture: %s", exc)
-                self._set_stats(last_error=f"falha ao abrir gst usb: {exc}")
-                capture.release()
-                return capture
-            if not opened:
-                self._set_stats(last_error="falha ao abrir gst usb")
+            capture = cv2.VideoCapture(self.settings.usb_camera_device, cv2.CAP_V4L2)
+            if self.settings.usb_camera_input_format.strip().lower() in {"mjpeg", "mjpg"}:
+                capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+            capture.set(cv2.CAP_PROP_FRAME_WIDTH, float(self.settings.usb_camera_width))
+            capture.set(cv2.CAP_PROP_FRAME_HEIGHT, float(self.settings.usb_camera_height))
+            capture.set(cv2.CAP_PROP_FPS, float(self.settings.usb_camera_fps))
             return capture
 
         return cv2.VideoCapture(self.settings.stream_url, cv2.CAP_FFMPEG)
