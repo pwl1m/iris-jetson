@@ -44,6 +44,8 @@ class Settings(BaseSettings):
     face_min_blur_score: float = 40.0
     visual_occlusion_enabled: bool = True
     visual_occlusion_score_threshold: float = 0.75
+    visual_occlusion_min_width: int = 96
+    visual_occlusion_min_height: int = 96
     visual_occlusion_dark_pixel_threshold: int = 55
     visual_occlusion_dark_lower_ratio: float = 0.45
     visual_occlusion_dark_top_ratio: float = 0.60

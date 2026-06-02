@@ -24,6 +24,24 @@ def evaluate_visual_occlusion(
     if crop.size == 0:
         return {"suspected": False, "score": 0.0, "signals": ["empty_crop"], "method": "heuristic_v1"}
 
+    bbox_width = max(0.0, float(detection.bbox[2]) - float(detection.bbox[0]))
+    bbox_height = max(0.0, float(detection.bbox[3]) - float(detection.bbox[1]))
+    if bbox_width < settings.visual_occlusion_min_width or bbox_height < settings.visual_occlusion_min_height:
+        return {
+            "suspected": False,
+            "score": 0.0,
+            "signals": ["face_too_small_for_visual_occlusion"],
+            "method": "heuristic_v1",
+            "metrics": {
+                "bbox_width": round(bbox_width, 2),
+                "bbox_height": round(bbox_height, 2),
+            },
+            "thresholds": {
+                "min_width": settings.visual_occlusion_min_width,
+                "min_height": settings.visual_occlusion_min_height,
+            },
+        }
+
     gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
     height, width = gray.shape[:2]
     top = gray[: max(1, int(height * 0.35)), :]

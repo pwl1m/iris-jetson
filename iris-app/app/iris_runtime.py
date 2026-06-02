@@ -702,14 +702,18 @@ class IrisRuntime:
             current_landmarks = int(detection.metadata.get("landmarks_detected") or 0)
             visual_occlusion = (recognition.get("face") or {}).get("visual_occlusion") or {}
             event_id = f"{captured_at.replace(':', '').replace('+', 'Z')}_{capture_number:08d}"
+            quality_reason = quality.get("reason")
+            visual_occlusion_attempt = bool(
+                visual_occlusion.get("suspected") and quality_reason in {None, "det_score_baixo"}
+            )
 
-            if quality.get("reason") == "face_ocluida" or visual_occlusion.get("suspected"):
+            if quality_reason == "face_ocluida" or visual_occlusion_attempt:
                 sudden = self._last_landmarks >= 80 and current_landmarks < 40
                 image_path = self._save_capture(event_id, frame)
                 face_path = None
                 if self.settings.pipeline_save_face_crop:
                     face_path = self._save_face_crop(event_id, detection.crop)
-                occlusion_reason = quality.get("reason") or "suspected_visual_occlusion"
+                occlusion_reason = quality_reason or "suspected_visual_occlusion"
                 self._write_occlusion({
                     "event_id": event_id,
                     "capture_id": event_id,
