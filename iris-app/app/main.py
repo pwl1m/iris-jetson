@@ -340,7 +340,7 @@ _DASHBOARD_HTML = """\
     <h2>Log de comparacoes</h2>
     <div class="events">
       <table>
-        <thead><tr><th>#</th><th>capture_id</th><th>timestamp</th><th>status</th><th>subject</th><th>similarity</th><th>det_score</th><th>candidates</th></tr></thead>
+        <thead><tr><th>#</th><th>capture_id</th><th>timestamp</th><th>status</th><th>subject</th><th>similarity</th><th>det_score</th><th>landmarks</th><th>candidates</th></tr></thead>
         <tbody id="eventRows"></tbody>
       </table>
     </div>
@@ -630,6 +630,9 @@ async function refresh() {
     const face = rec.face || {};
     const candidates = (rec.candidates || []).map(c => `${c.subject}:${fixed(c.similarity)}`).join(" | ");
     const statusClass = rec.status === "matched" ? "matched" : "no-match";
+    const landmarks = face.landmarks_detected !== undefined
+      ? `${face.landmarks_detected || 0}/${face.total_landmarks || 0}`
+      : "-";
     return `<tr>
       <td>${event.capture_number}</td>
       <td>${event.capture_id}</td>
@@ -638,6 +641,7 @@ async function refresh() {
       <td>${rec.subject || "-"}</td>
       <td>${fixed(rec.similarity)}</td>
       <td>${fixed(face.det_score)}</td>
+      <td>${landmarks}</td>
       <td>${candidates || "-"}</td>
     </tr>`;
   }).join("");
@@ -725,6 +729,8 @@ def debug_pipeline() -> dict:
     return runtime.debug_pipeline()
 
 
+# Oclusoes sao um stream proprio para o PHP distinguir sujeito cadastrado
+# ocluso de desconhecido tentando ocultar o rosto.
 @app.get("/occlusions")
 def occlusions(
     limit: int = 50,
@@ -766,6 +772,8 @@ def occlusion_face_image(event_id: str) -> FileResponse:
         raise HTTPException(status_code=404, detail="crop facial da oclusao nao encontrado") from exc
 
 
+# Cameras secundarias aparecem na API como cadastro rastreavel, mas no MVP
+# apenas a primaria tem worker de captura ligado.
 @app.get("/cameras")
 def cameras() -> dict:
     return runtime.cameras_status()
@@ -830,6 +838,8 @@ def stream_stop() -> dict:
     return runtime.stop_stream()
 
 
+# Captures e events compartilham o log de reconhecimentos; /captures existe
+# como atalho historico para listar/baixar imagens do worker.
 @app.get("/captures")
 def captures(limit: int = 20, since: str | None = None) -> dict:
     return runtime.recent_events(limit=limit, since=since)
@@ -848,6 +858,8 @@ def capture_image(capture_id: str) -> FileResponse:
         raise HTTPException(status_code=404, detail="captura nao encontrada") from exc
 
 
+# /events e o contrato principal de sincronizacao de reconhecimentos para
+# o new_structure, com cursor incremental via since.
 @app.get("/events")
 def events(limit: int = 20, camera_id: str | None = None, since: str | None = None) -> dict:
     return runtime.recent_events(limit=limit, camera_id=camera_id, since=since)

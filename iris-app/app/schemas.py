@@ -9,6 +9,12 @@ class CameraConfig:
     stream_url: str
     enabled: bool
     primary: bool = False
+    source_kind: str | None = None
+    device: str | None = None
+    input_format: str | None = None
+    width: int | None = None
+    height: int | None = None
+    fps: int | None = None
 
 
 @dataclass
@@ -28,4 +34,3 @@ class QualityResult:
     min_width: int
     min_height: int
     reason: str | None
-

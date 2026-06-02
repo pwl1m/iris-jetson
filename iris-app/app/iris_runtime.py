@@ -263,8 +263,15 @@ class IrisRuntime:
                     "camera_id": camera.camera_id,
                     "enabled": camera.enabled,
                     "primary": camera.primary,
+                    "source_kind": camera.source_kind,
+                    "device": camera.device,
                     "stream_url": camera.stream_url,
+                    "input_format": camera.input_format,
+                    "width": camera.width,
+                    "height": camera.height,
+                    "fps": camera.fps,
                     "active": bool(camera.primary and stream.get("thread_alive")),
+                    "worker_attached": bool(camera.primary),
                     "checks_per_second": self.settings.pipeline_checks_per_second,
                 }
             )
@@ -277,17 +284,22 @@ class IrisRuntime:
                     "camera": {
                         **camera.__dict__,
                         "active": bool(camera.primary and self.stream_status().get("thread_alive")),
+                        "worker_attached": bool(camera.primary),
                         "checks_per_second": self.settings.pipeline_checks_per_second,
                     }
                 }
         raise KeyError(camera_id)
 
     def start_camera(self, camera_id: str) -> dict:
+        # Fase 1 tem um unico worker de captura; cameras secundarias sao
+        # cadastro/contrato de API para o futuro backend multi-camera.
         if camera_id != self.settings.camera_1_id:
             raise ValueError("camera ainda nao ligada a worker dedicado")
         return self.start_stream()
 
     def stop_camera(self, camera_id: str) -> dict:
+        # Fase 1 tem um unico worker de captura; cameras secundarias sao
+        # cadastro/contrato de API para o futuro backend multi-camera.
         if camera_id != self.settings.camera_1_id:
             raise ValueError("camera ainda nao ligada a worker dedicado")
         return self.stop_stream()
@@ -688,19 +700,22 @@ class IrisRuntime:
             detection, quality, recognition = self.pipeline.analyze_frame(frame)
             face_score = float(detection.metadata.get("det_score") or 0.0)
             current_landmarks = int(detection.metadata.get("landmarks_detected") or 0)
+            visual_occlusion = (recognition.get("face") or {}).get("visual_occlusion") or {}
             event_id = f"{captured_at.replace(':', '').replace('+', 'Z')}_{capture_number:08d}"
 
-            if quality.get("reason") == "face_ocluida":
+            if quality.get("reason") == "face_ocluida" or visual_occlusion.get("suspected"):
                 sudden = self._last_landmarks >= 80 and current_landmarks < 40
                 image_path = self._save_capture(event_id, frame)
                 face_path = None
                 if self.settings.pipeline_save_face_crop:
                     face_path = self._save_face_crop(event_id, detection.crop)
+                occlusion_reason = quality.get("reason") or "suspected_visual_occlusion"
                 self._write_occlusion({
                     "event_id": event_id,
                     "capture_id": event_id,
                     "capture_number": capture_number,
                     "event_type": "occlusion",
+                    "occlusion_reason": occlusion_reason,
                     "occlusion_class": self._classify_occlusion(recognition),
                     "camera": self.settings.camera_name,
                     "captured_at": captured_at,
@@ -725,10 +740,11 @@ class IrisRuntime:
                         "bbox": detection.bbox,
                         "sudden": sudden,
                         "previous_landmarks": self._last_landmarks,
+                        "visual": visual_occlusion,
                     },
                 })
                 self._increment_stat("occlusions_written")
-                self._set_stats(last_error="face_ocluida", last_occlusion_at=captured_at, last_event_at=captured_at)
+                self._set_stats(last_error=occlusion_reason, last_occlusion_at=captured_at, last_event_at=captured_at)
                 self._last_landmarks = 0
                 return
 

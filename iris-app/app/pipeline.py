@@ -5,6 +5,7 @@ from .quality import evaluate_face_quality
 from .schemas import DetectionResult
 from .settings import Settings
 from .storage import FaceStore
+from .visual_occlusion import evaluate_visual_occlusion
 
 
 class IrisPipeline:
@@ -17,6 +18,8 @@ class IrisPipeline:
         detection = self.detector.detect_best(image)
         quality = evaluate_face_quality(self.settings, detection)
         recognition = self._compare_embedding(detection.embedding, detection.metadata)
+        visual_occlusion = evaluate_visual_occlusion(self.settings, detection, quality.__dict__, recognition)
+        recognition.setdefault("face", {})["visual_occlusion"] = visual_occlusion
         return detection, quality.__dict__, recognition
 
     def _compare_embedding(self, query_embedding, metadata: dict) -> dict:
