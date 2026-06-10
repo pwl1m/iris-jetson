@@ -8,21 +8,14 @@ on:
 
 jobs:
   deploy:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, arm64]
 
     steps:
       - name: Deploy on Jetson
-        uses: appleboy/ssh-action@v1.0.3
         env:
           JETSON_DEPLOY_PATH: ${{ secrets.JETSON_DEPLOY_PATH || '/home/nvidia-jetson/iris-jetson' }}
           JETSON_HEALTH_URL: ${{ secrets.JETSON_HEALTH_URL || 'http://localhost:8081/health' }}
-        with:
-          host: ${{ secrets.JETSON_HOST || '100.86.163.81' }}
-          username: ${{ secrets.JETSON_USER || 'nvidia-jetson' }}
-          key: ${{ secrets.JETSON_SSH_KEY }}
-          port: ${{ secrets.JETSON_PORT || '22' }}
-          envs: JETSON_DEPLOY_PATH,JETSON_HEALTH_URL
-          script: |
-            set -e
-            chmod +x "${JETSON_DEPLOY_PATH}/scripts/remote_deploy.sh"
-            "${JETSON_DEPLOY_PATH}/scripts/remote_deploy.sh"
+        run: |
+          set -e
+          chmod +x "${JETSON_DEPLOY_PATH}/scripts/remote_deploy.sh"
+          "${JETSON_DEPLOY_PATH}/scripts/remote_deploy.sh"

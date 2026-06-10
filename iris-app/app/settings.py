@@ -82,6 +82,26 @@ class Settings(BaseSettings):
     usb_camera_width: int = 1920
     usb_camera_height: int = 1080
     usb_camera_fps: int = 15
+    onix_push_enabled: bool = False
+    onix_push_url: str = ""
+    onix_push_token: str = ""
+    onix_push_device_uid: str = ""
+    onix_push_timeout_seconds: float = 1.5
+    onix_push_queue_size: int = 200
+    onix_push_workers: int = 4
+    onix_push_max_retries: int = 3
+    onix_push_retry_delay_seconds: float = 1.0
+    mqtt_publish_enabled: bool = False
+    mqtt_publish_host: str = ""
+    mqtt_publish_port: int = 1883
+    mqtt_publish_username: str = ""
+    mqtt_publish_password: str = ""
+    mqtt_publish_client_id: str = ""
+    mqtt_publish_topic_prefix: str = "iris"
+    mqtt_publish_qos: int = 1
+    mqtt_publish_queue_size: int = 500
+    mqtt_publish_keepalive_seconds: int = 30
+    mqtt_debounce_seconds: float = 30.0
 
     @property
     def det_size_tuple(self) -> tuple[int, int]:

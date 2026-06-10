@@ -1,5 +1,6 @@
 import json
 import logging
+import queue
 import socket
 import threading
 import time
@@ -11,6 +12,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+import paho.mqtt.client as mqtt
 
 from .cameras import configured_cameras
 from .detector import InsightFaceDetector
@@ -148,6 +150,12 @@ class IrisRuntime:
             "last_capture_at": None,
             "last_event_at": None,
             "last_error": None,
+            "push_sent": 0,
+            "push_errors": 0,
+            "last_push_error": None,
+            "mqtt_sent": 0,
+            "mqtt_errors": 0,
+            "last_mqtt_error": None,
             "stream_url": settings.stream_url,
             "stream_source_kind": settings.stream_source_kind_normalized,
             "camera": settings.camera_name,
@@ -158,17 +166,30 @@ class IrisRuntime:
         self._last_preview_update_monotonic = 0.0
         self._last_landmarks: int = 0
         self._occlusion_lock = threading.Lock()
+        self._push_stop_event = threading.Event()
+        self._push_threads: list[threading.Thread] = []
+        self._push_queue: queue.Queue[dict] = queue.Queue(maxsize=max(1, settings.onix_push_queue_size))
+        self._mqtt_stop_event = threading.Event()
+        self._mqtt_thread: threading.Thread | None = None
+        self._mqtt_queue: queue.Queue[dict] = queue.Queue(maxsize=max(1, settings.mqtt_publish_queue_size))
+        self._mqtt_client: mqtt.Client | None = None
+        self._mqtt_debounce: dict[tuple[str, str, str], float] = {}
+        self._mqtt_debounce_lock = threading.Lock()
 
     def start(self) -> None:
         logging.basicConfig(
             level=getattr(logging, self.settings.worker_log_level),
             format="%(asctime)s %(levelname)s %(message)s",
         )
+        self._start_push_worker()
+        self._start_mqtt_worker()
         if self.settings.stream_worker_enabled:
             self.start_stream()
 
     def stop(self) -> None:
         self.stop_stream()
+        self._stop_push_worker()
+        self._stop_mqtt_worker()
 
     def start_stream(self) -> dict:
         if self._stream_thread and self._stream_thread.is_alive():
@@ -691,6 +712,221 @@ class IrisRuntime:
         with self._occlusion_log().open("a", encoding="utf-8") as output:
             output.write(json.dumps(entry, ensure_ascii=True) + "\n")
 
+    def _start_push_worker(self) -> None:
+        if not self.settings.onix_push_enabled:
+            return
+        if not self.settings.onix_push_url.strip() or not self.settings.onix_push_token.strip():
+            self.logger.warning("ONIX push enabled without ONIX_PUSH_URL or ONIX_PUSH_TOKEN")
+            return
+        if any(thread.is_alive() for thread in self._push_threads):
+            return
+
+        self._push_stop_event.clear()
+        worker_count = max(1, min(16, int(self.settings.onix_push_workers)))
+        self._push_threads = []
+        for index in range(worker_count):
+            thread = threading.Thread(target=self._push_loop, name=f"onix-push-worker-{index + 1}", daemon=True)
+            thread.start()
+            self._push_threads.append(thread)
+
+    def _stop_push_worker(self) -> None:
+        self._push_stop_event.set()
+        for thread in self._push_threads:
+            thread.join(timeout=3)
+
+    def _enqueue_onix_push(self, kind: str, event: dict) -> None:
+        if not self.settings.onix_push_enabled:
+            return
+
+        device_uid = self.settings.onix_push_device_uid.strip()
+        if not device_uid:
+            self._set_stats(last_push_error="ONIX_PUSH_DEVICE_UID ausente")
+            return
+
+        payload = {
+            "device_uid": device_uid,
+            "kind": kind,
+            "event": event,
+            "sent_at": self._now(),
+        }
+
+        try:
+            self._push_queue.put_nowait(payload)
+        except queue.Full:
+            self._increment_stat("push_errors")
+            self._set_stats(last_push_error="fila de push Onix cheia")
+
+    def _start_mqtt_worker(self) -> None:
+        if not self.settings.mqtt_publish_enabled:
+            return
+        if not self.settings.mqtt_publish_host.strip():
+            self.logger.warning("MQTT publish enabled without MQTT_PUBLISH_HOST")
+            return
+        if self._mqtt_thread and self._mqtt_thread.is_alive():
+            return
+
+        self._mqtt_stop_event.clear()
+        self._mqtt_thread = threading.Thread(target=self._mqtt_loop, name="mqtt-publish-worker", daemon=True)
+        self._mqtt_thread.start()
+
+    def _stop_mqtt_worker(self) -> None:
+        self._mqtt_stop_event.set()
+        if self._mqtt_thread:
+            self._mqtt_thread.join(timeout=3)
+        if self._mqtt_client is not None:
+            try:
+                self._mqtt_client.disconnect()
+            except Exception:
+                pass
+
+    def _mqtt_debounce_key(self, kind: str, event: dict) -> tuple[str, str, str]:
+        camera_id = str(event.get("camera_id") or event.get("camera") or "default")
+        subject = str((event.get("recognition") or {}).get("subject") or "unknown")
+        return (kind, camera_id, subject)
+
+    def _is_mqtt_debounced(self, kind: str, event: dict) -> bool:
+        window = self.settings.mqtt_debounce_seconds
+        if window <= 0:
+            return False
+        key = self._mqtt_debounce_key(kind, event)
+        now = time.monotonic()
+        with self._mqtt_debounce_lock:
+            last = self._mqtt_debounce.get(key)
+            if last is not None and (now - last) < window:
+                return True
+            self._mqtt_debounce[key] = now
+        return False
+
+    def _enqueue_mqtt_publish(self, kind: str, event: dict) -> None:
+        if not self.settings.mqtt_publish_enabled:
+            return
+
+        if self._is_mqtt_debounced(kind, event):
+            self.logger.debug("mqtt debounce suprimiu kind=%s camera=%s subject=%s", kind, event.get("camera_id"), (event.get("recognition") or {}).get("subject"))
+            return
+
+        device_uid = self._device_uid_for_publish()
+        if not device_uid:
+            self._set_stats(last_mqtt_error="device_uid MQTT ausente")
+            return
+
+        payload = {
+            "device_uid": device_uid,
+            "kind": kind,
+            "event": event,
+            "sent_at": self._now(),
+        }
+
+        try:
+            self._mqtt_queue.put_nowait(payload)
+        except queue.Full:
+            self._increment_stat("mqtt_errors")
+            self._set_stats(last_mqtt_error="fila MQTT cheia")
+
+    def _mqtt_loop(self) -> None:
+        while not self._mqtt_stop_event.is_set():
+            try:
+                payload = self._mqtt_queue.get(timeout=0.5)
+            except queue.Empty:
+                continue
+
+            try:
+                self._publish_mqtt_payload(payload)
+            finally:
+                self._mqtt_queue.task_done()
+
+    def _publish_mqtt_payload(self, payload: dict) -> None:
+        try:
+            client = self._ensure_mqtt_client()
+            topic = self._mqtt_topic(str(payload.get("kind") or "event"), str(payload["device_uid"]))
+            body = json.dumps(payload, ensure_ascii=True)
+            result = client.publish(topic, body, qos=max(0, min(2, int(self.settings.mqtt_publish_qos))))
+            result.wait_for_publish(timeout=5)
+            if result.rc != mqtt.MQTT_ERR_SUCCESS:
+                raise RuntimeError(mqtt.error_string(result.rc))
+            self._increment_stat("mqtt_sent")
+            self._set_stats(last_mqtt_error=None)
+        except Exception as exc:
+            self._increment_stat("mqtt_errors")
+            self._set_stats(last_mqtt_error=str(exc))
+            self.logger.warning("failed to publish Iris event to MQTT: %s", exc)
+            try:
+                if self._mqtt_client is not None:
+                    self._mqtt_client.disconnect()
+            except Exception:
+                pass
+            self._mqtt_client = None
+
+    def _ensure_mqtt_client(self) -> mqtt.Client:
+        if self._mqtt_client is not None:
+            return self._mqtt_client
+
+        client_id = self.settings.mqtt_publish_client_id.strip() or f"iris-{socket.gethostname()}"
+        client = mqtt.Client(client_id=client_id, clean_session=True)
+        username = self.settings.mqtt_publish_username.strip()
+        if username:
+            client.username_pw_set(username, self.settings.mqtt_publish_password)
+        client.connect(
+            self.settings.mqtt_publish_host,
+            max(1, int(self.settings.mqtt_publish_port)),
+            keepalive=max(5, int(self.settings.mqtt_publish_keepalive_seconds)),
+        )
+        client.loop_start()
+        self._mqtt_client = client
+        return client
+
+    def _mqtt_topic(self, kind: str, device_uid: str) -> str:
+        suffix = "occlusions" if kind == "occlusion" else "events"
+        prefix = self.settings.mqtt_publish_topic_prefix.strip().strip("/") or "iris"
+        return f"{prefix}/{device_uid}/{suffix}"
+
+    def _device_uid_for_publish(self) -> str:
+        return self.settings.onix_push_device_uid.strip() or self.settings.mqtt_publish_client_id.strip()
+
+    def _push_loop(self) -> None:
+        while not self._push_stop_event.is_set():
+            try:
+                payload = self._push_queue.get(timeout=0.5)
+            except queue.Empty:
+                continue
+
+            try:
+                self._post_onix_payload(payload)
+            finally:
+                self._push_queue.task_done()
+
+    def _post_onix_payload(self, payload: dict) -> None:
+        body = json.dumps(payload, ensure_ascii=True).encode("utf-8")
+        headers = {
+            "Content-Type": "application/json",
+            "X-Iris-Ingest-Token": self.settings.onix_push_token,
+            "User-Agent": "iris-jetson-push/1.0",
+        }
+        attempts = max(1, int(self.settings.onix_push_max_retries))
+
+        for attempt in range(1, attempts + 1):
+            try:
+                request = urllib.request.Request(
+                    self.settings.onix_push_url,
+                    data=body,
+                    headers=headers,
+                    method="POST",
+                )
+                with urllib.request.urlopen(request, timeout=max(0.2, self.settings.onix_push_timeout_seconds)) as response:
+                    status = int(response.status)
+                    if 200 <= status < 300:
+                        self._increment_stat("push_sent")
+                        self._set_stats(last_push_error=None)
+                        return
+                    raise RuntimeError(f"HTTP {status}")
+            except Exception as exc:
+                if attempt >= attempts:
+                    self._increment_stat("push_errors")
+                    self._set_stats(last_push_error=str(exc))
+                    self.logger.warning("failed to push Iris event to Onix: %s", exc)
+                    return
+                time.sleep(max(0.1, self.settings.onix_push_retry_delay_seconds))
+
     def _process_frame(self, frame: np.ndarray) -> None:
         capture_number = self._increment_stat("captures_seen")
         captured_at = self._now()
@@ -714,7 +950,7 @@ class IrisRuntime:
                 if self.settings.pipeline_save_face_crop:
                     face_path = self._save_face_crop(event_id, detection.crop)
                 occlusion_reason = quality_reason or "suspected_visual_occlusion"
-                self._write_occlusion({
+                occlusion_event = {
                     "event_id": event_id,
                     "capture_id": event_id,
                     "capture_number": capture_number,
@@ -746,7 +982,10 @@ class IrisRuntime:
                         "previous_landmarks": self._last_landmarks,
                         "visual": visual_occlusion,
                     },
-                })
+                }
+                self._write_occlusion(occlusion_event)
+                self._enqueue_onix_push("occlusion", occlusion_event)
+                self._enqueue_mqtt_publish("occlusion", occlusion_event)
                 self._increment_stat("occlusions_written")
                 self._set_stats(last_error=occlusion_reason, last_occlusion_at=captured_at, last_event_at=captured_at)
                 self._last_landmarks = 0
@@ -784,6 +1023,8 @@ class IrisRuntime:
                 "recognition": recognition,
             }
             self._write_event(event)
+            self._enqueue_onix_push("event", event)
+            self._enqueue_mqtt_publish("event", event)
             self._latest_event = event
             self._increment_stat("events_written")
             self._set_stats(last_event_at=captured_at, last_error=None)

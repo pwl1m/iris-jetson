@@ -15,6 +15,7 @@ fi
 
 echo "Pulling latest code..."
 git checkout deploy/staging
+git checkout -- .
 git pull origin deploy/staging
 
 ./scripts/jetson_preflight.sh
