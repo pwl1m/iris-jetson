@@ -214,6 +214,7 @@ class IrisRuntime:
             embedding, metadata = self.recognizer.extract_best(image)
         source = f"{self.settings.face_model_name}:{filename}" if filename else self.settings.face_model_name
         embedding_id = self.store.add_embedding(subject=subject, embedding=embedding, source=source)
+        self._publish_subjects_snapshot()
         return {"status": "enrolled", "subject": subject, "embedding_id": embedding_id, "face": metadata}
 
     def enroll_capture(self, subject: str, capture_id: str) -> dict:
@@ -222,6 +223,7 @@ class IrisRuntime:
 
     def delete_subject(self, subject: str) -> dict:
         deleted = self.store.delete_subject(subject)
+        self._publish_subjects_snapshot()
         return {"status": "deleted", "subject": subject, "deleted": deleted}
 
     def subject_samples(self, subject: str) -> dict:
@@ -876,12 +878,47 @@ class IrisRuntime:
         return client
 
     def _mqtt_topic(self, kind: str, device_uid: str) -> str:
-        suffix = "occlusions" if kind == "occlusion" else "events"
+        if kind == "occlusion":
+            suffix = "occlusions"
+        elif kind == "subjects":
+            suffix = "subjects"
+        else:
+            suffix = "events"
         prefix = self.settings.mqtt_publish_topic_prefix.strip().strip("/") or "iris"
         return f"{prefix}/{device_uid}/{suffix}"
 
     def _device_uid_for_publish(self) -> str:
         return self.settings.onix_push_device_uid.strip() or self.settings.mqtt_publish_client_id.strip()
+
+    def _publish_subjects_snapshot(self) -> None:
+        if not self.settings.mqtt_publish_enabled:
+            return
+        device_uid = self._device_uid_for_publish()
+        if not device_uid:
+            return
+        try:
+            subjects_data = []
+            for entry in self.store.list_subjects():
+                name = entry["subject"] if isinstance(entry, dict) else str(entry)
+                samples = list(self.store.samples(name))
+                primary = samples[0] if samples else None
+                if primary:
+                    source = primary.get("source", "")
+                    filename = source.split(":", 1)[-1] if ":" in source else source
+                    capture_id = filename[:-4] if filename.endswith(".jpg") else None
+                    image_url = f"/captures/{capture_id}/image" if capture_id else None
+                else:
+                    image_url = None
+                subjects_data.append({"subject": name, "primary_image_url": image_url})
+            payload = {
+                "device_uid": device_uid,
+                "kind": "subjects",
+                "subjects": subjects_data,
+                "sent_at": self._now(),
+            }
+            self._mqtt_queue.put_nowait(payload)
+        except Exception as exc:
+            self.logger.warning("failed to publish subjects snapshot to MQTT: %s", exc)
 
     def _push_loop(self) -> None:
         while not self._push_stop_event.is_set():
