@@ -3,6 +3,7 @@ from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     face_db_path: str = "/data/faces/faces.sqlite3"
+    reference_image_dir: str = "/data/faces/reference-images"
     face_model_name: str = "buffalo_m"
     face_model_root: str = "/models/face"
     face_det_size: str = "480,480"

@@ -71,6 +71,19 @@ class FaceStore:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def sample(self, sample_id: int) -> dict | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT id, subject, source, created_at
+                FROM face_embeddings
+                WHERE id = ?
+                LIMIT 1
+                """,
+                (sample_id,),
+            ).fetchone()
+        return dict(row) if row else None
+
     def delete_sample(self, sample_id: int) -> int:
         with self._connect() as conn:
             cursor = conn.execute("DELETE FROM face_embeddings WHERE id = ?", (sample_id,))

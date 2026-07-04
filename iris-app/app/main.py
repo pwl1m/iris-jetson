@@ -818,6 +818,14 @@ def subject_samples(subject: str) -> dict:
     return runtime.subject_samples(subject)
 
 
+@app.get("/samples/{sample_id}/image")
+def sample_image(sample_id: int):
+    try:
+        return FileResponse(runtime.sample_image_path(sample_id), media_type="image/jpeg")
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="imagem da amostra nao encontrada") from exc
+
+
 @app.delete("/samples/{sample_id}")
 def delete_sample(sample_id: int) -> dict:
     return runtime.delete_sample(sample_id)

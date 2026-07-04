@@ -211,18 +211,31 @@ class IrisRuntime:
     def enroll(self, subject: str, filename: str | None, payload: bytes) -> dict:
         image = decode_image(payload)
         with self._recognizer_lock:
-            embedding, metadata = self.recognizer.extract_best(image)
+            candidate = self.recognizer.inspect_best(image, padding=self.settings.pipeline_face_crop_padding)
+            embedding = candidate["embedding"]
+            metadata = candidate["metadata"]
+            reference_image = candidate["crop"]
         source = f"{self.settings.face_model_name}:{filename}" if filename else self.settings.face_model_name
         embedding_id = self.store.add_embedding(subject=subject, embedding=embedding, source=source)
+        reference_image_url = self._save_reference_image(embedding_id, reference_image)
         self._publish_subjects_snapshot()
-        return {"status": "enrolled", "subject": subject, "embedding_id": embedding_id, "face": metadata}
+        return {
+            "status": "enrolled",
+            "subject": subject,
+            "embedding_id": embedding_id,
+            "reference_image_url": reference_image_url,
+            "face": metadata,
+        }
 
     def enroll_capture(self, subject: str, capture_id: str) -> dict:
         path = self.capture_image_path(capture_id)
         return self.enroll(subject=subject, filename=path.name, payload=path.read_bytes())
 
     def delete_subject(self, subject: str) -> dict:
+        samples = list(self.store.samples(subject))
         deleted = self.store.delete_subject(subject)
+        for sample in samples:
+            self._delete_reference_image(int(sample["id"]))
         self._publish_subjects_snapshot()
         return {"status": "deleted", "subject": subject, "deleted": deleted}
 
@@ -232,13 +245,18 @@ class IrisRuntime:
             source = sample.get("source") or ""
             filename = source.split(":", 1)[-1]
             capture_id = filename[:-4] if filename.endswith(".jpg") else None
+            sample_id = int(sample["id"])
             sample["capture_id"] = capture_id
-            sample["image_url"] = f"/captures/{capture_id}/image" if capture_id else None
+            sample["image_url"] = self._sample_image_url(sample_id, capture_id)
+            sample["reference_image_url"] = f"/samples/{sample_id}/image" if self._reference_image_path(sample_id).exists() else None
             samples.append(sample)
         return {"subject": subject, "samples": samples}
 
     def delete_sample(self, sample_id: int) -> dict:
         deleted = self.store.delete_sample(sample_id)
+        if deleted:
+            self._delete_reference_image(sample_id)
+            self._publish_subjects_snapshot()
         return {"status": "deleted", "sample_id": sample_id, "deleted": deleted}
 
     def recognize_bytes(self, payload: bytes) -> dict:
@@ -409,7 +427,7 @@ class IrisRuntime:
         }
 
     def subjects(self) -> dict:
-        return {"subjects": self.store.list_subjects()}
+        return {"subjects": self._subjects_with_primary_images()}
 
     def health(self) -> dict:
         engine = self.engine_status()
@@ -507,6 +525,73 @@ class IrisRuntime:
         if not candidate.exists():
             raise FileNotFoundError(capture_id)
         return candidate
+
+    def sample_image_path(self, sample_id: int) -> Path:
+        sample = self.store.sample(sample_id)
+        if not sample:
+            raise FileNotFoundError(str(sample_id))
+
+        reference = self._reference_image_path(sample_id)
+        if reference.exists():
+            return reference
+
+        source = sample.get("source") or ""
+        filename = source.split(":", 1)[-1] if ":" in source else source
+        capture_id = filename[:-4] if filename.endswith(".jpg") else None
+        if capture_id:
+            return self.capture_image_path(capture_id)
+
+        raise FileNotFoundError(str(sample_id))
+
+    def _subjects_with_primary_images(self) -> list[dict]:
+        subjects = []
+        for entry in self.store.list_subjects():
+            subject = dict(entry)
+            samples = list(self.store.samples(str(subject["subject"])))
+            primary = samples[0] if samples else None
+            if primary:
+                source = primary.get("source", "")
+                filename = source.split(":", 1)[-1] if ":" in source else source
+                capture_id = filename[:-4] if filename.endswith(".jpg") else None
+                subject["primary_image_url"] = self._sample_image_url(int(primary["id"]), capture_id)
+            else:
+                subject["primary_image_url"] = None
+            subjects.append(subject)
+        return subjects
+
+    def _reference_image_dir(self) -> Path:
+        path = Path(self.settings.reference_image_dir)
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def _reference_image_path(self, sample_id: int) -> Path:
+        return self._reference_image_dir() / f"{int(sample_id)}.jpg"
+
+    def _save_reference_image(self, sample_id: int, image: np.ndarray) -> str | None:
+        path = self._reference_image_path(sample_id)
+        try:
+            ok = cv2.imwrite(str(path), image, [int(cv2.IMWRITE_JPEG_QUALITY), 92])
+            if not ok:
+                raise RuntimeError("cv2.imwrite retornou falso")
+            return f"/samples/{int(sample_id)}/image"
+        except Exception as exc:
+            self.logger.warning("failed to save reference image sample=%s: %s", sample_id, exc)
+            return None
+
+    def _delete_reference_image(self, sample_id: int) -> None:
+        path = self._reference_image_path(sample_id)
+        try:
+            if path.exists():
+                path.unlink()
+        except OSError:
+            self.logger.warning("failed to delete reference image sample=%s", sample_id)
+
+    def _sample_image_url(self, sample_id: int, capture_id: str | None = None) -> str | None:
+        if self._reference_image_path(sample_id).exists():
+            return f"/samples/{int(sample_id)}/image"
+        if capture_id:
+            return f"/captures/{capture_id}/image"
+        return None
 
     def _capture_dir(self) -> Path:
         path = Path(self.settings.capture_dir)
@@ -898,17 +983,9 @@ class IrisRuntime:
             return
         try:
             subjects_data = []
-            for entry in self.store.list_subjects():
+            for entry in self._subjects_with_primary_images():
                 name = entry["subject"] if isinstance(entry, dict) else str(entry)
-                samples = list(self.store.samples(name))
-                primary = samples[0] if samples else None
-                if primary:
-                    source = primary.get("source", "")
-                    filename = source.split(":", 1)[-1] if ":" in source else source
-                    capture_id = filename[:-4] if filename.endswith(".jpg") else None
-                    image_url = f"/captures/{capture_id}/image" if capture_id else None
-                else:
-                    image_url = None
+                image_url = entry.get("primary_image_url") if isinstance(entry, dict) else None
                 subjects_data.append({"subject": name, "primary_image_url": image_url})
             payload = {
                 "device_uid": device_uid,
