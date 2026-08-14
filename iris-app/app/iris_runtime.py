@@ -625,7 +625,6 @@ class IrisRuntime:
         path = self._capture_dir() / f"{capture_id}.jpg"
         ok = cv2.imwrite(str(path), frame, [
             int(cv2.IMWRITE_JPEG_QUALITY), self.settings.stream_jpeg_quality,
-            int(cv2.IMWRITE_JPEG_OPTIMIZE), 1,
             int(cv2.IMWRITE_JPEG_PROGRESSIVE), 0,
         ])
         if not ok:
@@ -636,7 +635,6 @@ class IrisRuntime:
         path = self._face_dir() / f"{event_id}.jpg"
         ok = cv2.imwrite(str(path), crop, [
             int(cv2.IMWRITE_JPEG_QUALITY), self.settings.stream_jpeg_quality,
-            int(cv2.IMWRITE_JPEG_OPTIMIZE), 1,
             int(cv2.IMWRITE_JPEG_PROGRESSIVE), 0,
         ])
         if not ok:
@@ -771,7 +769,6 @@ class IrisRuntime:
             preview,
             [
                 int(cv2.IMWRITE_JPEG_QUALITY), int(self.settings.stream_preview_jpeg_quality),
-                int(cv2.IMWRITE_JPEG_OPTIMIZE), 1,
                 int(cv2.IMWRITE_JPEG_PROGRESSIVE), 0,
             ],
         )
@@ -1158,19 +1155,23 @@ class IrisRuntime:
             self.logger.exception("failed to process stream frame: %s", exc)
 
     def _prune_captures(self) -> None:
+        cutoff = None
+        retention_hours = self.settings.stream_capture_retention_hours
+        if retention_hours and retention_hours > 0:
+            cutoff = time.time() - retention_hours * 3600.0
+
         max_files = self.settings.stream_max_capture_files
-        if max_files <= 0:
+        if cutoff is None and max_files <= 0:
             return
 
-        files = sorted(self._capture_dir().glob("*.jpg"), key=lambda item: item.stat().st_mtime, reverse=True)
-        for old_file in files[max_files:]:
-            try:
-                old_file.unlink()
-            except OSError:
-                self.logger.warning("failed to remove old capture %s", old_file)
-        face_files = sorted(self._face_dir().glob("*.jpg"), key=lambda item: item.stat().st_mtime, reverse=True)
-        for old_file in face_files[max_files:]:
-            try:
-                old_file.unlink()
-            except OSError:
-                self.logger.warning("failed to remove old face crop %s", old_file)
+        for directory, label in ((self._capture_dir(), "capture"), (self._face_dir(), "face crop")):
+            files = sorted(directory.glob("*.jpg"), key=lambda item: item.stat().st_mtime, reverse=True)
+            for index, old_file in enumerate(files):
+                too_old = cutoff is not None and old_file.stat().st_mtime < cutoff
+                over_limit = max_files > 0 and index >= max_files
+                if not too_old and not over_limit:
+                    continue
+                try:
+                    old_file.unlink()
+                except OSError:
+                    self.logger.warning("failed to remove old %s %s", label, old_file)

@@ -1,7 +1,8 @@
 from contextlib import asynccontextmanager
+import time
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
 
 from .settings import settings
 from .iris_runtime import IrisRuntime
@@ -569,17 +570,22 @@ function refreshPreviewImage() {
   const image = document.getElementById("latestImage");
   const empty = document.getElementById("emptyImage");
   if (streamRunning && streamPreviewReady) {
-    image.src = `/preview/latest.jpg?t=${Date.now()}`;
+    if (image.dataset.source !== "stream") {
+      image.src = "/preview/stream.mjpg";
+      image.dataset.source = "stream";
+    }
     image.hidden = false;
     empty.hidden = true;
     return;
   }
   if (latestFallbackImageUrl) {
     image.src = `${latestFallbackImageUrl}?t=${Date.now()}`;
+    image.dataset.source = "fallback";
     image.hidden = false;
     empty.hidden = true;
     return;
   }
+  image.dataset.source = "";
   image.hidden = true;
   empty.hidden = false;
 }
@@ -903,6 +909,30 @@ def latest_preview_image() -> Response:
     if not payload:
         raise HTTPException(status_code=404, detail="preview indisponivel")
     return Response(content=payload, media_type="image/jpeg", headers={"Cache-Control": "no-store, max-age=0"})
+
+
+@app.get("/preview/stream.mjpg")
+def preview_stream() -> StreamingResponse:
+    def frames():
+        last_payload = None
+        while True:
+            payload = runtime.latest_preview_jpeg()
+            if payload and payload != last_payload:
+                last_payload = payload
+                yield (
+                    b"--iris-preview\r\n"
+                    b"Content-Type: image/jpeg\r\n"
+                    b"Cache-Control: no-store\r\n\r\n"
+                    + payload
+                    + b"\r\n"
+                )
+            time.sleep(max(0.1, settings.stream_preview_update_interval_seconds))
+
+    return StreamingResponse(
+        frames(),
+        media_type="multipart/x-mixed-replace; boundary=iris-preview",
+        headers={"Cache-Control": "no-store, max-age=0"},
+    )
 
 
 @app.post("/captures/{capture_id}/enroll")

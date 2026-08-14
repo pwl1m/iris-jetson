@@ -6,6 +6,28 @@ from pathlib import Path
 import numpy as np
 
 
+def _iter_jsonl_reverse(path: Path, block_size: int = 1024 * 1024) -> Iterable[str]:
+    with path.open("rb") as file:
+        file.seek(0, 2)
+        position = file.tell()
+        pending = b""
+
+        while position > 0:
+            read_size = min(block_size, position)
+            position -= read_size
+            file.seek(position)
+            chunk = file.read(read_size)
+            lines = (chunk + pending).split(b"\n")
+            pending = lines[0]
+
+            for line in reversed(lines[1:]):
+                if line:
+                    yield line.decode("utf-8")
+
+        if pending:
+            yield pending.decode("utf-8")
+
+
 class FaceStore:
     def __init__(self, db_path: str):
         self.db_path = Path(db_path)
@@ -106,7 +128,7 @@ def read_jsonl_events(
     if not path.exists():
         return []
     events: list[dict] = []
-    for row in reversed(path.read_text(encoding="utf-8").splitlines()):
+    for row in _iter_jsonl_reverse(path):
         if not row.strip():
             continue
         event = json.loads(row)
@@ -128,7 +150,7 @@ def read_jsonl_tail(path: Path, limit: int) -> list[dict]:
 def find_jsonl_event(path: Path, event_id: str) -> dict | None:
     if not path.exists():
         return None
-    for row in reversed(path.read_text(encoding="utf-8").splitlines()):
+    for row in _iter_jsonl_reverse(path):
         if not row.strip():
             continue
         event = json.loads(row)

@@ -29,6 +29,7 @@ class Settings(BaseSettings):
     stream_jpeg_quality: int = 90
     stream_min_face_score: float = 0.5
     stream_max_capture_files: int = 2000
+    stream_capture_retention_hours: float = 48.0
     stream_preview_update_interval_seconds: float = 0.25
     stream_preview_max_width: int = 640
     stream_preview_jpeg_quality: int = 70
