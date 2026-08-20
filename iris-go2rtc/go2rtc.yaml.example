@@ -3,7 +3,11 @@ api:
 
 streams:
   usb_camera:
-    - "ffmpeg:device?video=0&input_format=mjpeg&video_size=1920x1080&framerate=15#video=h264"
+    - "ffmpeg:device?video=${CAMERA_1_INDEX:-0}&input_format=${USB_CAMERA_INPUT_FORMAT:-mjpeg}&video_size=${USB_CAMERA_WIDTH:-1920}x${USB_CAMERA_HEIGHT:-1080}&framerate=${USB_CAMERA_FPS:-15}#video=h264"
+  usb_camera_1:
+    - "ffmpeg:device?video=${CAMERA_1_INDEX:-0}&input_format=${USB_CAMERA_INPUT_FORMAT:-mjpeg}&video_size=${USB_CAMERA_WIDTH:-1920}x${USB_CAMERA_HEIGHT:-1080}&framerate=${USB_CAMERA_FPS:-15}#video=h264"
+  usb_camera_2:
+    - "ffmpeg:device?video=${CAMERA_2_INDEX:-2}&input_format=${USB_CAMERA_INPUT_FORMAT:-mjpeg}&video_size=${USB_CAMERA_WIDTH:-1920}x${USB_CAMERA_HEIGHT:-1080}&framerate=${USB_CAMERA_FPS:-15}#video=h264"
 
 rtsp:
   listen: ":8554"

@@ -61,7 +61,7 @@ Segredos opcionais:
 - evitar reintroduzir fluxo de notebook aqui
 - registrar mudancas de modelo em `../docs/DECISIONS.md` e `../docs/MODEL_PLAN.md`
 
-No fluxo atual, o `iris-app` consome stream do `iris-go2rtc` diretamente e registra eventos/capturas locais para debug operacional.
+No fluxo atual, o `iris-app` processa cada camera USB habilitada em um worker independente e registra eventos/capturas locais com `camera_id`. O `iris-go2rtc` expoe os mesmos dispositivos como streams separados (`usb_camera_1` e `usb_camera_2`).
 
 Existe agora uma variante experimental para Jetson em que o `iris-app` pode consumir a camera USB diretamente por GStreamer/NVIDIA, sem depender do RTSP interno para inferencia.
 

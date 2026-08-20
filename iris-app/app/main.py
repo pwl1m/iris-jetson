@@ -778,8 +778,8 @@ def occlusion_face_image(event_id: str) -> FileResponse:
         raise HTTPException(status_code=404, detail="crop facial da oclusao nao encontrado") from exc
 
 
-# Cameras secundarias aparecem na API como cadastro rastreavel, mas no MVP
-# apenas a primaria tem worker de captura ligado.
+# Cameras habilitadas possuem workers independentes; entradas desabilitadas
+# continuam rastreaveis para preservar o contrato de ate quatro cameras.
 @app.get("/cameras")
 def cameras() -> dict:
     return runtime.cameras_status()
@@ -797,6 +797,8 @@ def camera_status(camera_id: str) -> dict:
 def camera_start(camera_id: str) -> dict:
     try:
         return runtime.start_camera(camera_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="camera nao encontrada") from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -805,6 +807,8 @@ def camera_start(camera_id: str) -> dict:
 def camera_stop(camera_id: str) -> dict:
     try:
         return runtime.stop_camera(camera_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="camera nao encontrada") from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -860,8 +864,8 @@ def captures(limit: int = 20, since: str | None = None) -> dict:
 
 
 @app.get("/captures/latest")
-def latest_capture() -> dict:
-    return runtime.latest_event()
+def latest_capture(camera_id: str | None = None) -> dict:
+    return runtime.latest_event(camera_id=camera_id)
 
 
 @app.get("/captures/{capture_id}/image")
@@ -904,19 +908,59 @@ def event_face_image(event_id: str) -> FileResponse:
 
 
 @app.get("/preview/latest.jpg")
-def latest_preview_image() -> Response:
-    payload = runtime.latest_preview_jpeg()
+def latest_preview_image(camera_id: str | None = None) -> Response:
+    payload = runtime.latest_preview_jpeg(camera_id=camera_id)
     if not payload:
         raise HTTPException(status_code=404, detail="preview indisponivel")
     return Response(content=payload, media_type="image/jpeg", headers={"Cache-Control": "no-store, max-age=0"})
 
 
 @app.get("/preview/stream.mjpg")
-def preview_stream() -> StreamingResponse:
+def preview_stream(camera_id: str | None = None) -> StreamingResponse:
     def frames():
         last_payload = None
         while True:
-            payload = runtime.latest_preview_jpeg()
+            payload = runtime.latest_preview_jpeg(camera_id=camera_id)
+            if payload and payload != last_payload:
+                last_payload = payload
+                yield (
+                    b"--iris-preview\r\n"
+                    b"Content-Type: image/jpeg\r\n"
+                    b"Cache-Control: no-store\r\n\r\n"
+                    + payload
+                    + b"\r\n"
+                )
+            time.sleep(max(0.1, settings.stream_preview_update_interval_seconds))
+
+    return StreamingResponse(
+        frames(),
+        media_type="multipart/x-mixed-replace; boundary=iris-preview",
+        headers={"Cache-Control": "no-store, max-age=0"},
+    )
+
+
+@app.get("/cameras/{camera_id}/preview/latest.jpg")
+def camera_preview_image(camera_id: str) -> Response:
+    try:
+        payload = runtime.latest_preview_jpeg(camera_id=camera_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="camera nao encontrada") from exc
+    if not payload:
+        raise HTTPException(status_code=404, detail="preview indisponivel")
+    return Response(content=payload, media_type="image/jpeg", headers={"Cache-Control": "no-store, max-age=0"})
+
+
+@app.get("/cameras/{camera_id}/preview/stream.mjpg")
+def camera_preview_stream(camera_id: str) -> StreamingResponse:
+    try:
+        runtime.camera_status(camera_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="camera nao encontrada") from exc
+
+    def frames():
+        last_payload = None
+        while True:
+            payload = runtime.latest_preview_jpeg(camera_id=camera_id)
             if payload and payload != last_payload:
                 last_payload = payload
                 yield (

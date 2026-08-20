@@ -30,7 +30,7 @@ Data: 2026-06-01
 
 ## Cenário 1: MVP — 1 câmera USB
 
-**Estado atual do projeto.**
+**Referencia historica do MVP de uma camera.** O runtime atual tambem suporta duas cameras USB habilitadas em paralelo.
 
 ### Configuração
 
@@ -73,7 +73,7 @@ C930e USB UVC (/dev/video0)
 | Decode JPEG em CPU | 49ms/frame, escala linear com nº de câmeras USB |
 | Single-thread | 1 câmera apenas |
 | Sem GStreamer nativo | Sem acesso ao pipeline acelerado NVIDIA |
-| `camera_2` só placeholder | Código não suporta múltiplas câmeras |
+| `camera_2` | Worker independente, configurado por `CAMERA_2_*` |
 | USB bandwidth | 1 câmera MJPEG 1080p = ~6 MB/s — USB 3.0 sobra |
 
 ### Complexidade para próximo cenário

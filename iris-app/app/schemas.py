@@ -15,6 +15,9 @@ class CameraConfig:
     width: int | None = None
     height: int | None = None
     fps: int | None = None
+    serial_number: str | None = None
+    model_name: str | None = None
+    stable_path: str | None = None
 
 
 @dataclass

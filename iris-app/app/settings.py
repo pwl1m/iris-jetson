@@ -64,11 +64,17 @@ class Settings(BaseSettings):
     camera_1_enabled: bool = True
     camera_1_source_kind: str = ""
     camera_1_device: str = ""
+    camera_1_serial: str = ""
+    camera_1_model: str = ""
+    camera_1_stable_path: str = ""
     camera_2_id: str = "entrada_2"
     camera_2_stream_url: str = ""
     camera_2_enabled: bool = False
     camera_2_source_kind: str = ""
     camera_2_device: str = ""
+    camera_2_serial: str = ""
+    camera_2_model: str = ""
+    camera_2_stable_path: str = ""
     camera_3_id: str = "entrada_3"
     camera_3_stream_url: str = ""
     camera_3_enabled: bool = False
@@ -117,6 +123,11 @@ class Settings(BaseSettings):
     @property
     def stream_source_kind_normalized(self) -> str:
         return self.stream_source_kind.strip().lower()
+
+    @property
+    def effective_checks_per_second(self) -> float:
+        interval = float(self.stream_capture_interval_seconds)
+        return round(1.0 / interval, 3) if interval > 0 else 0.0
 
 
 settings = Settings()

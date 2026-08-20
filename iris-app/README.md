@@ -53,7 +53,7 @@ Aplicacao principal da Fase 1: API FastAPI, cadastro facial, reconhecimento e wo
 
 ## Worker De Stream
 
-O worker usa `STREAM_SOURCE_KIND=jetson_gst_usb` como padrao no Jetson, abre `/dev/video0` via OpenCV `CAP_V4L2`, configura FOURCC `MJPG`, resolucao e FPS, processa uma captura a cada `STREAM_CAPTURE_INTERVAL_SECONDS`, salva imagens em `CAPTURE_DIR` e grava eventos em `EVENT_LOG_PATH`.
+O worker usa `STREAM_SOURCE_KIND=jetson_gst_usb` como padrao no Jetson, abre cada dispositivo configurado em `CAMERA_n_DEVICE` via OpenCV `CAP_V4L2`, configura FOURCC `MJPG`, resolucao e FPS, processa uma captura por camera a cada `STREAM_CAPTURE_INTERVAL_SECONDS`, salva imagens em `CAPTURE_DIR` e grava eventos em `EVENT_LOG_PATH`.
 
 O pipeline atual ja separa detector, filtro de qualidade, crop de rosto e reconhecimento `buffalo_m`, conforme o plano em `../../docs/IRIS_PIPELINE_PLAN_2026-05-29.md`.
 
@@ -90,9 +90,7 @@ Esse contrato permite ao `new_structure` sincronizar e expor no dominio publico 
 
 ## Cameras
 
-O MVP atual processa uma camera primaria (`CAMERA_1_ID=entrada`) com um unico worker. A API `/cameras` ja retorna metadados para ate quatro cameras (`CAMERA_1_*` a `CAMERA_4_*`) para que o PHP consiga rastrear futuras configuracoes multi-camera sem mudar o contrato publico.
-
-Enquanto o backend multi-camera nao for implementado, somente a camera primaria retorna `worker_attached=true`; iniciar/parar cameras secundarias retorna conflito operacional.
+O runtime processa todas as cameras habilitadas (`CAMERA_1_*` a `CAMERA_4_*`) com um worker independente por camera. A inferencia compartilha o modelo facial sob lock para evitar duplicacao de memoria e concorrencia insegura no Jetson. A API `/cameras` retorna status individual, e previews podem ser consultados em `/cameras/{camera_id}/preview/latest.jpg` ou `/cameras/{camera_id}/preview/stream.mjpg`.
 
 Contrato de integracao atual:
 

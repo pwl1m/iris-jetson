@@ -67,7 +67,8 @@ services:
       - /usr/lib/aarch64-linux-gnu/gstreamer-1.0:/usr/lib/aarch64-linux-gnu/gstreamer-1.0:ro
       - /usr/lib/aarch64-linux-gnu/tegra:/usr/lib/aarch64-linux-gnu/tegra:ro
     devices:
-      - "${USB_CAMERA_DEVICE:-/dev/video0}:${USB_CAMERA_DEVICE:-/dev/video0}"
+      - "${CAMERA_1_HOST_DEVICE:-/dev/video0}:${CAMERA_1_DEVICE:-/dev/video0}"
+      - "${CAMERA_2_HOST_DEVICE:-/dev/video2}:${CAMERA_2_DEVICE:-/dev/video2}"
     networks:
       - iris-lab
 

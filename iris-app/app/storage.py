@@ -132,14 +132,20 @@ def read_jsonl_events(
         if not row.strip():
             continue
         event = json.loads(row)
-        cursor = event.get("event_id") or event.get("capture_id") or event.get("captured_at")
-        if since and cursor is not None and str(cursor) <= since:
-            continue
         if predicate and not predicate(event):
             continue
-        events.append(event)
-        if len(events) >= max(1, int(limit)):
+        cursor = event.get("event_id") or event.get("capture_id") or event.get("captured_at")
+        if since and cursor is not None and str(cursor) == since:
             break
+        events.append(event)
+        if not since and len(events) >= max(1, int(limit)):
+            break
+    if since:
+        # A leitura fisica e reversa, mas a reconciliacao precisa receber o
+        # lote mais antigo depois do cursor. Assim o proximo cursor avanca sem
+        # saltar eventos quando o backlog e maior que o limite.
+        events.reverse()
+        return events[: max(1, int(limit))]
     return events
 
 

@@ -3,8 +3,8 @@ from .settings import Settings
 
 
 def configured_cameras(settings: Settings) -> list[CameraConfig]:
-    # Fase 1 processa somente a camera primaria. As entradas 2-4 ja ficam
-    # rastreaveis na API para o read model PHP e a evolucao multi-camera.
+    # Cameras 1-2 possuem workers independentes quando habilitadas. As demais
+    # continuam rastreaveis para preservar o contrato de ate quatro cameras.
     specs = [
         (
             settings.camera_1_id,
@@ -13,6 +13,9 @@ def configured_cameras(settings: Settings) -> list[CameraConfig]:
             True,
             settings.camera_1_source_kind or settings.stream_source_kind_normalized,
             settings.camera_1_device or settings.usb_camera_device,
+            settings.camera_1_serial,
+            settings.camera_1_model,
+            settings.camera_1_stable_path,
         ),
         (
             settings.camera_2_id,
@@ -21,6 +24,9 @@ def configured_cameras(settings: Settings) -> list[CameraConfig]:
             False,
             settings.camera_2_source_kind,
             settings.camera_2_device,
+            settings.camera_2_serial,
+            settings.camera_2_model,
+            settings.camera_2_stable_path,
         ),
         (
             settings.camera_3_id,
@@ -29,6 +35,9 @@ def configured_cameras(settings: Settings) -> list[CameraConfig]:
             False,
             settings.camera_3_source_kind,
             settings.camera_3_device,
+            "",
+            "",
+            "",
         ),
         (
             settings.camera_4_id,
@@ -37,11 +46,14 @@ def configured_cameras(settings: Settings) -> list[CameraConfig]:
             False,
             settings.camera_4_source_kind,
             settings.camera_4_device,
+            "",
+            "",
+            "",
         ),
     ]
 
     cameras = []
-    for camera_id, stream_url, enabled, primary, source_kind, device in specs:
+    for camera_id, stream_url, enabled, primary, source_kind, device, serial, model, stable_path in specs:
         effective_source_kind = source_kind or ("rtsp" if stream_url else None)
         cameras.append(
             CameraConfig(
@@ -57,6 +69,9 @@ def configured_cameras(settings: Settings) -> list[CameraConfig]:
                 width=settings.usb_camera_width if effective_source_kind in {"jetson_gst_usb", "usb"} else None,
                 height=settings.usb_camera_height if effective_source_kind in {"jetson_gst_usb", "usb"} else None,
                 fps=settings.usb_camera_fps if effective_source_kind in {"jetson_gst_usb", "usb"} else None,
+                serial_number=serial or None,
+                model_name=model or None,
+                stable_path=stable_path or None,
             )
         )
     return [camera for camera in cameras if camera.camera_id]

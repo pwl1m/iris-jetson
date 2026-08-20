@@ -18,6 +18,7 @@ from .cameras import configured_cameras
 from .detector import InsightFaceDetector
 from .pipeline import IrisPipeline
 from .recognizer import InsightFaceRecognizer, cosine_similarity, decode_image
+from .schemas import CameraConfig
 from .settings import Settings
 from .storage import FaceStore, find_jsonl_event, read_jsonl_events
 
@@ -117,6 +118,41 @@ class _GstUsbCapture:
         )
 
 
+class _CameraWorkerState:
+    def __init__(self, camera: CameraConfig):
+        self.camera = camera
+        self.stop_event = threading.Event()
+        self.thread: threading.Thread | None = None
+        self.stats_lock = threading.Lock()
+        self.preview_lock = threading.Lock()
+        self.stats = {
+            "running": False,
+            "captures_seen": 0,
+            "events_written": 0,
+            "occlusions_written": 0,
+            "frames_read": 0,
+            "recognition_errors": 0,
+            "last_occlusion_at": None,
+            "last_capture_at": None,
+            "last_event_at": None,
+            "last_error": None,
+            "push_sent": 0,
+            "push_errors": 0,
+            "last_push_error": None,
+            "mqtt_sent": 0,
+            "mqtt_errors": 0,
+            "last_mqtt_error": None,
+            "stream_url": camera.stream_url,
+            "stream_source_kind": camera.source_kind,
+            "camera": camera.camera_id,
+        }
+        self.latest_event: dict | None = None
+        self.latest_preview_jpeg: bytes | None = None
+        self.latest_preview_at: str | None = None
+        self.last_preview_update_monotonic = 0.0
+        self.last_landmarks = 0
+
+
 class IrisRuntime:
     def __init__(self, settings: Settings):
         self.settings = settings
@@ -134,38 +170,13 @@ class IrisRuntime:
         self.detector = InsightFaceDetector(self.recognizer, crop_padding=settings.pipeline_face_crop_padding)
         self.pipeline = IrisPipeline(settings, self.detector, self.store)
         self.cameras = configured_cameras(settings)
-        self._stop_event = threading.Event()
-        self._stream_thread: threading.Thread | None = None
-        self._recognizer_lock = threading.RLock()
-        self._stats_lock = threading.Lock()
-        self._preview_lock = threading.Lock()
-        self._stats = {
-            "running": False,
-            "captures_seen": 0,
-            "events_written": 0,
-            "occlusions_written": 0,
-            "frames_read": 0,
-            "recognition_errors": 0,
-            "last_occlusion_at": None,
-            "last_capture_at": None,
-            "last_event_at": None,
-            "last_error": None,
-            "push_sent": 0,
-            "push_errors": 0,
-            "last_push_error": None,
-            "mqtt_sent": 0,
-            "mqtt_errors": 0,
-            "last_mqtt_error": None,
-            "stream_url": settings.stream_url,
-            "stream_source_kind": settings.stream_source_kind_normalized,
-            "camera": settings.camera_name,
+        self._camera_workers = {
+            camera.camera_id: _CameraWorkerState(camera) for camera in self.cameras
         }
-        self._latest_event: dict | None = None
-        self._latest_preview_jpeg: bytes | None = None
-        self._latest_preview_at: str | None = None
-        self._last_preview_update_monotonic = 0.0
-        self._last_landmarks: int = 0
+        self._recognizer_lock = threading.RLock()
+        self._event_lock = threading.Lock()
         self._occlusion_lock = threading.Lock()
+        self._retention_lock = threading.Lock()
         self._push_stop_event = threading.Event()
         self._push_threads: list[threading.Thread] = []
         self._push_queue: queue.Queue[dict] = queue.Queue(maxsize=max(1, settings.onix_push_queue_size))
@@ -192,21 +203,38 @@ class IrisRuntime:
         self._stop_mqtt_worker()
 
     def start_stream(self) -> dict:
-        if self._stream_thread and self._stream_thread.is_alive():
-            return self.stream_status()
-
-        self._stop_event.clear()
-        self._stream_thread = threading.Thread(target=self._stream_loop, name="stream-worker", daemon=True)
-        self._stream_thread.start()
-        self._set_stats(running=True, last_error=None)
+        for camera in self.cameras:
+            if camera.enabled:
+                self._start_camera_worker(camera.camera_id)
         return self.stream_status()
 
     def stop_stream(self) -> dict:
-        self._stop_event.set()
-        if self._stream_thread:
-            self._stream_thread.join(timeout=5)
-        self._set_stats(running=False)
+        for camera in self.cameras:
+            self._stop_camera_worker(camera.camera_id)
         return self.stream_status()
+
+    def _start_camera_worker(self, camera_id: str) -> None:
+        state = self._camera_workers[camera_id]
+        if not state.camera.enabled:
+            raise ValueError("camera desabilitada na configuracao")
+        if state.thread and state.thread.is_alive():
+            return
+        state.stop_event.clear()
+        state.thread = threading.Thread(
+            target=self._stream_loop,
+            args=(state.camera,),
+            name=f"stream-worker-{camera_id}",
+            daemon=True,
+        )
+        state.thread.start()
+        self._set_stats(state, running=True, last_error=None)
+
+    def _stop_camera_worker(self, camera_id: str) -> None:
+        state = self._camera_workers[camera_id]
+        state.stop_event.set()
+        if state.thread:
+            state.thread.join(timeout=5)
+        self._set_stats(state, running=False)
 
     def enroll(self, subject: str, filename: str | None, payload: bytes) -> dict:
         image = decode_image(payload)
@@ -297,8 +325,9 @@ class IrisRuntime:
     def cameras_status(self) -> dict:
         items = []
         primary_id = self.settings.camera_1_id
-        stream = self.stream_status()
         for camera in self.cameras:
+            stream = self.stream_status(camera.camera_id)
+            healthy = self._stream_is_healthy(stream)
             items.append(
                 {
                     "camera_id": camera.camera_id,
@@ -311,9 +340,14 @@ class IrisRuntime:
                     "width": camera.width,
                     "height": camera.height,
                     "fps": camera.fps,
-                    "active": bool(camera.primary and stream.get("thread_alive")),
-                    "worker_attached": bool(camera.primary),
-                    "checks_per_second": self.settings.pipeline_checks_per_second,
+                    "camera_serial_number": camera.serial_number,
+                    "camera_model_name": camera.model_name,
+                    "capture_stable_path": camera.stable_path,
+                    "active": healthy,
+                    "worker_attached": bool(stream.get("thread_alive")),
+                    "checks_per_second": self.settings.effective_checks_per_second,
+                    "last_frame_at": stream.get("last_capture_at"),
+                    "last_error": stream.get("last_error"),
                 }
             )
         return {"cameras": items, "primary_camera_id": primary_id}
@@ -321,29 +355,30 @@ class IrisRuntime:
     def camera_status(self, camera_id: str) -> dict:
         for camera in self.cameras:
             if camera.camera_id == camera_id:
+                stream = self.stream_status(camera_id)
                 return {
                     "camera": {
                         **camera.__dict__,
-                        "active": bool(camera.primary and self.stream_status().get("thread_alive")),
-                        "worker_attached": bool(camera.primary),
-                        "checks_per_second": self.settings.pipeline_checks_per_second,
+                        "active": self._stream_is_healthy(stream),
+                        "worker_attached": bool(stream.get("thread_alive")),
+                        "checks_per_second": self.settings.effective_checks_per_second,
+                        "last_frame_at": stream.get("last_capture_at"),
+                        "last_error": stream.get("last_error"),
                     }
                 }
         raise KeyError(camera_id)
 
     def start_camera(self, camera_id: str) -> dict:
-        # Fase 1 tem um unico worker de captura; cameras secundarias sao
-        # cadastro/contrato de API para o futuro backend multi-camera.
-        if camera_id != self.settings.camera_1_id:
-            raise ValueError("camera ainda nao ligada a worker dedicado")
-        return self.start_stream()
+        if camera_id not in self._camera_workers:
+            raise KeyError(camera_id)
+        self._start_camera_worker(camera_id)
+        return self.stream_status(camera_id)
 
     def stop_camera(self, camera_id: str) -> dict:
-        # Fase 1 tem um unico worker de captura; cameras secundarias sao
-        # cadastro/contrato de API para o futuro backend multi-camera.
-        if camera_id != self.settings.camera_1_id:
-            raise ValueError("camera ainda nao ligada a worker dedicado")
-        return self.stop_stream()
+        if camera_id not in self._camera_workers:
+            raise KeyError(camera_id)
+        self._stop_camera_worker(camera_id)
+        return self.stream_status(camera_id)
 
     def debug_pipeline(self) -> dict:
         return {
@@ -354,7 +389,7 @@ class IrisRuntime:
                 "min_height": self.settings.face_min_height,
                 "min_blur_score": self.settings.face_min_blur_score,
             },
-            "checks_per_second": self.settings.pipeline_checks_per_second,
+            "checks_per_second": self.settings.effective_checks_per_second,
             "interval_seconds": self.settings.stream_capture_interval_seconds,
             "cameras": self.cameras_status()["cameras"],
             "engine": self.engine_status(),
@@ -431,15 +466,41 @@ class IrisRuntime:
 
     def health(self) -> dict:
         engine = self.engine_status()
+        streams = [self.stream_status(camera.camera_id) for camera in self.cameras]
+        enabled_streams = [stream for stream in streams if stream.get("enabled")]
+        status = "ok" if enabled_streams and all(self._stream_is_healthy(stream) for stream in enabled_streams) else "degraded"
         return {
-            "status": "ok",
+            "status": status,
+            "controller_status": "online",
             "model": self.settings.face_model_name,
             "threshold": self.settings.face_similarity_threshold,
             "providers": self.settings.providers_list,
             "ctx_id": self.settings.face_ctx_id,
             "engine": engine,
             "stream": self.stream_status(),
+            "streams": streams,
         }
+
+    def _stream_is_healthy(self, stream: dict) -> bool:
+        if not stream.get("enabled"):
+            return False
+        if not stream.get("running") or not stream.get("thread_alive"):
+            return False
+        last_capture_at = stream.get("last_capture_at")
+        if not last_capture_at:
+            return False
+        try:
+            captured_at = datetime.fromisoformat(str(last_capture_at).replace("Z", "+00:00"))
+            if captured_at.tzinfo is None:
+                captured_at = captured_at.replace(tzinfo=timezone.utc)
+            max_age = max(
+                15.0,
+                float(self.settings.stream_capture_interval_seconds) * 4.0,
+                float(self.settings.stream_reconnect_delay_seconds) * 2.0,
+            )
+            return (datetime.now(timezone.utc) - captured_at).total_seconds() <= max_age
+        except (TypeError, ValueError):
+            return False
 
     def engine_status(self) -> dict:
         report = self.recognizer.provider_report()
@@ -450,27 +511,34 @@ class IrisRuntime:
         report["mode"] = mode
         return report
 
-    def stream_status(self) -> dict:
-        with self._stats_lock:
-            stats = dict(self._stats)
-        stats["thread_alive"] = bool(self._stream_thread and self._stream_thread.is_alive())
-        stats["enabled"] = self.settings.stream_worker_enabled
+    def stream_status(self, camera_id: str | None = None) -> dict:
+        camera_id = camera_id or self.settings.camera_1_id
+        state = self._camera_workers[camera_id]
+        with state.stats_lock:
+            stats = dict(state.stats)
+        stats["camera_id"] = camera_id
+        stats["thread_alive"] = bool(state.thread and state.thread.is_alive())
+        stats["enabled"] = bool(state.camera.enabled and self.settings.stream_worker_enabled)
         stats["interval_seconds"] = self.settings.stream_capture_interval_seconds
-        with self._preview_lock:
-            stats["preview_at"] = self._latest_preview_at
+        with state.preview_lock:
+            stats["preview_at"] = state.latest_preview_at
         return stats
 
-    def latest_preview_jpeg(self) -> bytes | None:
-        with self._preview_lock:
-            return self._latest_preview_jpeg
+    def latest_preview_jpeg(self, camera_id: str | None = None) -> bytes | None:
+        camera_id = camera_id or self.settings.camera_1_id
+        state = self._camera_workers[camera_id]
+        with state.preview_lock:
+            return state.latest_preview_jpeg
 
     def recent_events(self, limit: int = 20, camera_id: str | None = None, since: str | None = None) -> dict:
         return self._recent_events(limit=limit, camera_id=camera_id, since=since)
 
-    def latest_event(self) -> dict:
-        if self._latest_event:
-            return {"event": self._latest_event}
-        events = self._recent_events(limit=1, camera_id=None)["events"]
+    def latest_event(self, camera_id: str | None = None) -> dict:
+        camera_id = camera_id or self.settings.camera_1_id
+        state = self._camera_workers[camera_id]
+        if state.latest_event:
+            return {"event": state.latest_event}
+        events = self._recent_events(limit=1, camera_id=camera_id)["events"]
         return {"event": events[0] if events else None}
 
     def recent_occlusions(
@@ -608,18 +676,23 @@ class IrisRuntime:
         path.parent.mkdir(parents=True, exist_ok=True)
         return path
 
-    def _set_stats(self, **updates) -> None:
-        with self._stats_lock:
-            self._stats.update(updates)
+    def _set_stats(self, state: _CameraWorkerState, **updates) -> None:
+        with state.stats_lock:
+            state.stats.update(updates)
 
-    def _increment_stat(self, name: str) -> int:
-        with self._stats_lock:
-            self._stats[name] = int(self._stats.get(name) or 0) + 1
-            return int(self._stats[name])
+    def _increment_stat(self, state: _CameraWorkerState, name: str) -> int:
+        with state.stats_lock:
+            state.stats[name] = int(state.stats.get(name) or 0) + 1
+            return int(state.stats[name])
+
+    def _state_for_event(self, event: dict) -> _CameraWorkerState:
+        camera_id = str(event.get("camera_id") or self.settings.camera_1_id)
+        return self._camera_workers.get(camera_id) or self._camera_workers[self.settings.camera_1_id]
 
     def _write_event(self, event: dict) -> None:
-        with self._event_log().open("a", encoding="utf-8") as output:
-            output.write(json.dumps(event, ensure_ascii=True) + "\n")
+        with self._event_lock:
+            with self._event_log().open("a", encoding="utf-8") as output:
+                output.write(json.dumps(event, ensure_ascii=True) + "\n")
 
     def _save_capture(self, capture_id: str, frame: np.ndarray) -> Path:
         path = self._capture_dir() / f"{capture_id}.jpg"
@@ -644,63 +717,66 @@ class IrisRuntime:
     def _now(self) -> str:
         return datetime.now(timezone.utc).isoformat()
 
-    def _stream_loop(self) -> None:
+    def _stream_loop(self, camera: CameraConfig) -> None:
+        state = self._camera_workers[camera.camera_id]
         self.logger.info(
-            "stream worker starting source_kind=%s url=%s",
-            self.settings.stream_source_kind_normalized,
-            self.settings.stream_url,
+            "stream worker starting camera=%s source_kind=%s device=%s url=%s",
+            camera.camera_id,
+            camera.source_kind,
+            camera.device or "-",
+            camera.stream_url,
         )
-        while not self._stop_event.is_set():
-            self._wait_for_stream_source()
-            if self._stop_event.is_set():
+        while not state.stop_event.is_set():
+            self._wait_for_stream_source(camera, state)
+            if state.stop_event.is_set():
                 break
-            capture = self._open_capture()
+            capture = self._open_capture(camera)
             if not capture.isOpened():
-                self._set_stats(last_error=f"source indisponivel ({self.settings.stream_source_kind_normalized})")
-                self.logger.warning("stream unavailable, retrying in %.1fs", self.settings.stream_reconnect_delay_seconds)
+                self._set_stats(state, running=False, last_error=f"source indisponivel ({camera.source_kind})")
+                self.logger.warning("camera=%s unavailable, retrying in %.1fs", camera.camera_id, self.settings.stream_reconnect_delay_seconds)
                 time.sleep(self.settings.stream_reconnect_delay_seconds)
                 continue
 
-            if self.settings.stream_source_kind_normalized == "rtsp" and self.settings.stream_reader_buffer_size > 0:
+            if camera.source_kind == "rtsp" and self.settings.stream_reader_buffer_size > 0:
                 capture.set(cv2.CAP_PROP_BUFFERSIZE, float(self.settings.stream_reader_buffer_size))
 
-            self._set_stats(running=True, last_error=None)
+            self._set_stats(state, running=True, last_error=None)
             last_processed = 0.0
             try:
-                while not self._stop_event.is_set():
+                while not state.stop_event.is_set():
                     ok, frame = capture.read()
                     if not ok or frame is None:
-                        self._set_stats(last_error="falha ao ler frame")
+                        self._set_stats(state, running=False, last_error="falha ao ler frame")
                         break
 
-                    self._increment_stat("frames_read")
+                    self._increment_stat(state, "frames_read")
                     now = time.monotonic()
-                    self._update_preview(frame, now)
+                    self._update_preview(state, frame, now)
                     if now - last_processed < self.settings.stream_capture_interval_seconds:
                         continue
                     last_processed = now
 
-                    self._process_frame(frame)
+                    self._process_frame(frame, camera, state)
             finally:
                 capture.release()
 
-            if not self._stop_event.is_set():
+            if not state.stop_event.is_set():
                 time.sleep(self.settings.stream_reconnect_delay_seconds)
 
-        self._set_stats(running=False)
-        self.logger.info("stream worker stopped")
+        self._set_stats(state, running=False)
+        self.logger.info("stream worker stopped camera=%s", camera.camera_id)
 
-    def _wait_for_stream_source(self) -> None:
-        if self.settings.stream_source_kind_normalized == "jetson_gst_usb":
+    def _wait_for_stream_source(self, camera: CameraConfig, state: _CameraWorkerState) -> None:
+        if camera.source_kind in {"jetson_gst_usb", "usb"}:
             return
 
-        parsed = urllib.parse.urlparse(self.settings.stream_url)
+        parsed = urllib.parse.urlparse(camera.stream_url)
         host = parsed.hostname
         port = parsed.port or (554 if parsed.scheme == "rtsp" else None)
         probe_url = (self.settings.stream_source_probe_url or "").strip()
         deadline = time.monotonic() + max(0.0, self.settings.stream_source_ready_timeout_seconds)
 
-        while not self._stop_event.is_set():
+        while not state.stop_event.is_set():
             host_ready = True
             if host and port:
                 try:
@@ -709,7 +785,7 @@ class IrisRuntime:
                         pass
                 except OSError as exc:
                     host_ready = False
-                    self._set_stats(last_error=f"aguardando stream source: {exc}")
+                    self._set_stats(state, last_error=f"aguardando stream source: {exc}")
 
             probe_ready = True
             if host_ready and probe_url:
@@ -725,7 +801,7 @@ class IrisRuntime:
                             )
                 except Exception as exc:
                     probe_ready = False
-                    self._set_stats(last_error=f"aguardando stream probe: {exc}")
+                    self._set_stats(state, last_error=f"aguardando stream probe: {exc}")
 
             if host_ready and probe_ready:
                 return
@@ -733,16 +809,16 @@ class IrisRuntime:
             if time.monotonic() >= deadline:
                 self.logger.warning(
                     "stream source not ready yet url=%s probe=%s, continuing with open attempts",
-                    self.settings.stream_url,
+                    camera.stream_url,
                     probe_url or "-",
                 )
                 return
 
             time.sleep(min(1.0, self.settings.stream_reconnect_delay_seconds))
 
-    def _open_capture(self):
-        if self.settings.stream_source_kind_normalized == "jetson_gst_usb":
-            capture = cv2.VideoCapture(self.settings.usb_camera_device, cv2.CAP_V4L2)
+    def _open_capture(self, camera: CameraConfig):
+        if camera.source_kind in {"jetson_gst_usb", "usb"}:
+            capture = cv2.VideoCapture(camera.device, cv2.CAP_V4L2)
             if self.settings.usb_camera_input_format.strip().lower() in {"mjpeg", "mjpg"}:
                 capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
             capture.set(cv2.CAP_PROP_FRAME_WIDTH, float(self.settings.usb_camera_width))
@@ -750,12 +826,12 @@ class IrisRuntime:
             capture.set(cv2.CAP_PROP_FPS, float(self.settings.usb_camera_fps))
             return capture
 
-        return cv2.VideoCapture(self.settings.stream_url, cv2.CAP_FFMPEG)
+        return cv2.VideoCapture(camera.stream_url, cv2.CAP_FFMPEG)
 
-    def _update_preview(self, frame: np.ndarray, now_monotonic: float) -> None:
-        if now_monotonic - self._last_preview_update_monotonic < self.settings.stream_preview_update_interval_seconds:
+    def _update_preview(self, state: _CameraWorkerState, frame: np.ndarray, now_monotonic: float) -> None:
+        if now_monotonic - state.last_preview_update_monotonic < self.settings.stream_preview_update_interval_seconds:
             return
-        self._last_preview_update_monotonic = now_monotonic
+        state.last_preview_update_monotonic = now_monotonic
 
         preview = frame
         max_width = max(0, self.settings.stream_preview_max_width)
@@ -775,9 +851,9 @@ class IrisRuntime:
         if not ok:
             return
 
-        with self._preview_lock:
-            self._latest_preview_jpeg = encoded.tobytes()
-            self._latest_preview_at = self._now()
+        with state.preview_lock:
+            state.latest_preview_jpeg = encoded.tobytes()
+            state.latest_preview_at = self._now()
 
     def _occlusion_log(self) -> Path:
         path = Path(self.settings.occlusion_log_path)
@@ -793,8 +869,9 @@ class IrisRuntime:
         return "unknown_subject_occluded"
 
     def _write_occlusion(self, entry: dict) -> None:
-        with self._occlusion_log().open("a", encoding="utf-8") as output:
-            output.write(json.dumps(entry, ensure_ascii=True) + "\n")
+        with self._occlusion_lock:
+            with self._occlusion_log().open("a", encoding="utf-8") as output:
+                output.write(json.dumps(entry, ensure_ascii=True) + "\n")
 
     def _start_push_worker(self) -> None:
         if not self.settings.onix_push_enabled:
@@ -822,9 +899,10 @@ class IrisRuntime:
         if not self.settings.onix_push_enabled:
             return
 
+        state = self._state_for_event(event)
         device_uid = self.settings.onix_push_device_uid.strip()
         if not device_uid:
-            self._set_stats(last_push_error="ONIX_PUSH_DEVICE_UID ausente")
+            self._set_stats(state, last_push_error="ONIX_PUSH_DEVICE_UID ausente")
             return
 
         payload = {
@@ -837,8 +915,8 @@ class IrisRuntime:
         try:
             self._push_queue.put_nowait(payload)
         except queue.Full:
-            self._increment_stat("push_errors")
-            self._set_stats(last_push_error="fila de push Onix cheia")
+            self._increment_stat(state, "push_errors")
+            self._set_stats(state, last_push_error="fila de push Onix cheia")
 
     def _start_mqtt_worker(self) -> None:
         if not self.settings.mqtt_publish_enabled:
@@ -885,13 +963,14 @@ class IrisRuntime:
         if not self.settings.mqtt_publish_enabled:
             return
 
+        state = self._state_for_event(event)
         if self._is_mqtt_debounced(kind, event):
             self.logger.debug("mqtt debounce suprimiu kind=%s camera=%s subject=%s", kind, event.get("camera_id"), (event.get("recognition") or {}).get("subject"))
             return
 
         device_uid = self._device_uid_for_publish()
         if not device_uid:
-            self._set_stats(last_mqtt_error="device_uid MQTT ausente")
+            self._set_stats(state, last_mqtt_error="device_uid MQTT ausente")
             return
 
         payload = {
@@ -904,8 +983,8 @@ class IrisRuntime:
         try:
             self._mqtt_queue.put_nowait(payload)
         except queue.Full:
-            self._increment_stat("mqtt_errors")
-            self._set_stats(last_mqtt_error="fila MQTT cheia")
+            self._increment_stat(state, "mqtt_errors")
+            self._set_stats(state, last_mqtt_error="fila MQTT cheia")
 
     def _mqtt_loop(self) -> None:
         while not self._mqtt_stop_event.is_set():
@@ -920,6 +999,7 @@ class IrisRuntime:
                 self._mqtt_queue.task_done()
 
     def _publish_mqtt_payload(self, payload: dict) -> None:
+        state = self._state_for_event(payload.get("event") or {})
         try:
             client = self._ensure_mqtt_client()
             topic = self._mqtt_topic(str(payload.get("kind") or "event"), str(payload["device_uid"]))
@@ -928,11 +1008,11 @@ class IrisRuntime:
             result.wait_for_publish(timeout=5)
             if result.rc != mqtt.MQTT_ERR_SUCCESS:
                 raise RuntimeError(mqtt.error_string(result.rc))
-            self._increment_stat("mqtt_sent")
-            self._set_stats(last_mqtt_error=None)
+            self._increment_stat(state, "mqtt_sent")
+            self._set_stats(state, last_mqtt_error=None)
         except Exception as exc:
-            self._increment_stat("mqtt_errors")
-            self._set_stats(last_mqtt_error=str(exc))
+            self._increment_stat(state, "mqtt_errors")
+            self._set_stats(state, last_mqtt_error=str(exc))
             self.logger.warning("failed to publish Iris event to MQTT: %s", exc)
             try:
                 if self._mqtt_client is not None:
@@ -1007,6 +1087,7 @@ class IrisRuntime:
                 self._push_queue.task_done()
 
     def _post_onix_payload(self, payload: dict) -> None:
+        state = self._state_for_event(payload.get("event") or {})
         body = json.dumps(payload, ensure_ascii=True).encode("utf-8")
         headers = {
             "Content-Type": "application/json",
@@ -1026,36 +1107,37 @@ class IrisRuntime:
                 with urllib.request.urlopen(request, timeout=max(0.2, self.settings.onix_push_timeout_seconds)) as response:
                     status = int(response.status)
                     if 200 <= status < 300:
-                        self._increment_stat("push_sent")
-                        self._set_stats(last_push_error=None)
+                        self._increment_stat(state, "push_sent")
+                        self._set_stats(state, last_push_error=None)
                         return
                     raise RuntimeError(f"HTTP {status}")
             except Exception as exc:
                 if attempt >= attempts:
-                    self._increment_stat("push_errors")
-                    self._set_stats(last_push_error=str(exc))
+                    self._increment_stat(state, "push_errors")
+                    self._set_stats(state, last_push_error=str(exc))
                     self.logger.warning("failed to push Iris event to Onix: %s", exc)
                     return
                 time.sleep(max(0.1, self.settings.onix_push_retry_delay_seconds))
 
-    def _process_frame(self, frame: np.ndarray) -> None:
-        capture_number = self._increment_stat("captures_seen")
+    def _process_frame(self, frame: np.ndarray, camera: CameraConfig, state: _CameraWorkerState) -> None:
+        capture_number = self._increment_stat(state, "captures_seen")
         captured_at = self._now()
-        self._set_stats(last_capture_at=captured_at)
+        self._set_stats(state, last_capture_at=captured_at)
 
         try:
-            detection, quality, recognition = self.pipeline.analyze_frame(frame)
+            with self._recognizer_lock:
+                detection, quality, recognition = self.pipeline.analyze_frame(frame)
             face_score = float(detection.metadata.get("det_score") or 0.0)
             current_landmarks = int(detection.metadata.get("landmarks_detected") or 0)
             visual_occlusion = (recognition.get("face") or {}).get("visual_occlusion") or {}
-            event_id = f"{captured_at.replace(':', '').replace('+', 'Z')}_{capture_number:08d}"
+            event_id = f"{camera.camera_id}_{captured_at.replace(':', '').replace('+', 'Z')}_{capture_number:08d}"
             quality_reason = quality.get("reason")
             visual_occlusion_attempt = bool(
                 visual_occlusion.get("suspected") and quality_reason in {None, "det_score_baixo"}
             )
 
             if quality_reason == "face_ocluida" or visual_occlusion_attempt:
-                sudden = self._last_landmarks >= 80 and current_landmarks < 40
+                sudden = state.last_landmarks >= 80 and current_landmarks < 40
                 image_path = self._save_capture(event_id, frame)
                 face_path = None
                 if self.settings.pipeline_save_face_crop:
@@ -1068,9 +1150,9 @@ class IrisRuntime:
                     "event_type": "occlusion",
                     "occlusion_reason": occlusion_reason,
                     "occlusion_class": self._classify_occlusion(recognition),
-                    "camera": self.settings.camera_name,
+                    "camera": camera.camera_id,
                     "captured_at": captured_at,
-                    "camera_id": self.settings.camera_1_id,
+                    "camera_id": camera.camera_id,
                     "image_path": str(image_path),
                     "image_url": f"/captures/{event_id}/image",
                     "frame_image_url": f"/occlusions/{event_id}/frame.jpg",
@@ -1090,23 +1172,23 @@ class IrisRuntime:
                         "det_score": detection.det_score,
                         "bbox": detection.bbox,
                         "sudden": sudden,
-                        "previous_landmarks": self._last_landmarks,
+                        "previous_landmarks": state.last_landmarks,
                         "visual": visual_occlusion,
                     },
                 }
                 self._write_occlusion(occlusion_event)
                 self._enqueue_onix_push("occlusion", occlusion_event)
                 self._enqueue_mqtt_publish("occlusion", occlusion_event)
-                self._increment_stat("occlusions_written")
-                self._set_stats(last_error=occlusion_reason, last_occlusion_at=captured_at, last_event_at=captured_at)
-                self._last_landmarks = 0
+                self._increment_stat(state, "occlusions_written")
+                self._set_stats(state, last_error=occlusion_reason, last_occlusion_at=captured_at, last_event_at=captured_at)
+                state.last_landmarks = 0
                 return
 
             if face_score < self.settings.stream_min_face_score or not quality.get("accepted"):
-                self._last_landmarks = 0
+                state.last_landmarks = 0
                 return
 
-            self._last_landmarks = current_landmarks
+            state.last_landmarks = current_landmarks
             image_path = self._save_capture(event_id, frame)
             face_path = None
             if self.settings.pipeline_save_face_crop:
@@ -1117,8 +1199,8 @@ class IrisRuntime:
                 "event_id": event_id,
                 "capture_id": event_id,
                 "capture_number": capture_number,
-                "camera": self.settings.camera_name,
-                "camera_id": self.settings.camera_1_id,
+                "camera": camera.camera_id,
+                "camera_id": camera.camera_id,
                 "captured_at": captured_at,
                 "image_path": str(image_path),
                 "image_url": f"/captures/{event_id}/image",
@@ -1136,9 +1218,9 @@ class IrisRuntime:
             self._write_event(event)
             self._enqueue_onix_push("event", event)
             self._enqueue_mqtt_publish("event", event)
-            self._latest_event = event
-            self._increment_stat("events_written")
-            self._set_stats(last_event_at=captured_at, last_error=None)
+            state.latest_event = event
+            self._increment_stat(state, "events_written")
+            self._set_stats(state, last_event_at=captured_at, last_error=None)
             self.logger.info(
                 "event=%s status=%s subject=%s similarity=%s",
                 event_id,
@@ -1147,31 +1229,38 @@ class IrisRuntime:
                 recognition.get("similarity"),
             )
         except ValueError as exc:
-            self._increment_stat("recognition_errors")
-            self._set_stats(last_error=str(exc))
+            self._increment_stat(state, "recognition_errors")
+            self._set_stats(state, last_error=str(exc))
         except Exception as exc:
-            self._increment_stat("recognition_errors")
-            self._set_stats(last_error=str(exc))
-            self.logger.exception("failed to process stream frame: %s", exc)
+            self._increment_stat(state, "recognition_errors")
+            self._set_stats(state, last_error=str(exc))
+            self.logger.exception("failed to process stream frame camera=%s: %s", camera.camera_id, exc)
 
     def _prune_captures(self) -> None:
-        cutoff = None
-        retention_hours = self.settings.stream_capture_retention_hours
-        if retention_hours and retention_hours > 0:
-            cutoff = time.time() - retention_hours * 3600.0
+        with self._retention_lock:
+            cutoff = None
+            retention_hours = self.settings.stream_capture_retention_hours
+            if retention_hours and retention_hours > 0:
+                cutoff = time.time() - retention_hours * 3600.0
 
-        max_files = self.settings.stream_max_capture_files
-        if cutoff is None and max_files <= 0:
-            return
+            max_files = self.settings.stream_max_capture_files
+            if cutoff is None and max_files <= 0:
+                return
 
-        for directory, label in ((self._capture_dir(), "capture"), (self._face_dir(), "face crop")):
-            files = sorted(directory.glob("*.jpg"), key=lambda item: item.stat().st_mtime, reverse=True)
-            for index, old_file in enumerate(files):
-                too_old = cutoff is not None and old_file.stat().st_mtime < cutoff
-                over_limit = max_files > 0 and index >= max_files
-                if not too_old and not over_limit:
-                    continue
-                try:
-                    old_file.unlink()
-                except OSError:
-                    self.logger.warning("failed to remove old %s %s", label, old_file)
+            for directory, label in ((self._capture_dir(), "capture"), (self._face_dir(), "face crop")):
+                files = []
+                for item in directory.glob("*.jpg"):
+                    try:
+                        files.append((item, item.stat().st_mtime))
+                    except FileNotFoundError:
+                        continue
+                files.sort(key=lambda entry: entry[1], reverse=True)
+                for index, (old_file, modified_at) in enumerate(files):
+                    too_old = cutoff is not None and modified_at < cutoff
+                    over_limit = max_files > 0 and index >= max_files
+                    if not too_old and not over_limit:
+                        continue
+                    try:
+                        old_file.unlink(missing_ok=True)
+                    except OSError:
+                        self.logger.warning("failed to remove old %s %s", label, old_file)
