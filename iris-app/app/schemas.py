@@ -8,6 +8,7 @@ class CameraConfig:
     camera_id: str
     stream_url: str
     enabled: bool
+    public_stream_url: str | None = None
     primary: bool = False
     source_kind: str | None = None
     device: str | None = None

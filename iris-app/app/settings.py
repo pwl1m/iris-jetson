@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     stream_max_capture_files: int = 2000
     stream_capture_retention_hours: float = 48.0
     stream_preview_update_interval_seconds: float = 0.25
+    stream_preview_enabled: bool = True
     stream_preview_max_width: int = 640
     stream_preview_jpeg_quality: int = 70
     stream_reader_buffer_size: int = 1
@@ -61,6 +62,7 @@ class Settings(BaseSettings):
     visual_occlusion_min_candidate_similarity: float = 0.35
     camera_1_id: str = "entrada"
     camera_1_stream_url: str = "rtsp://iris-go2rtc:8554/usb_camera"
+    camera_1_public_stream_url: str = ""
     camera_1_enabled: bool = True
     camera_1_source_kind: str = ""
     camera_1_device: str = ""
@@ -69,6 +71,7 @@ class Settings(BaseSettings):
     camera_1_stable_path: str = ""
     camera_2_id: str = "entrada_2"
     camera_2_stream_url: str = ""
+    camera_2_public_stream_url: str = ""
     camera_2_enabled: bool = False
     camera_2_source_kind: str = ""
     camera_2_device: str = ""
@@ -77,11 +80,13 @@ class Settings(BaseSettings):
     camera_2_stable_path: str = ""
     camera_3_id: str = "entrada_3"
     camera_3_stream_url: str = ""
+    camera_3_public_stream_url: str = ""
     camera_3_enabled: bool = False
     camera_3_source_kind: str = ""
     camera_3_device: str = ""
     camera_4_id: str = "entrada_4"
     camera_4_stream_url: str = ""
+    camera_4_public_stream_url: str = ""
     camera_4_enabled: bool = False
     camera_4_source_kind: str = ""
     camera_4_device: str = ""

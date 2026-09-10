@@ -13,10 +13,24 @@ if [ ! -f .env ]; then
   exit 1
 fi
 
-echo "Pulling latest code..."
+if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  echo "${APP_DIR} nao e um repositorio Git." >&2
+  exit 1
+fi
+
+# O deploy nunca descarta alteracoes locais. Arquivos de runtime ignorados,
+# como .env e o compose gerado para cameras, continuam preservados.
+if ! git diff --quiet || ! git diff --cached --quiet; then
+  echo "Worktree com alteracoes rastreadas; deploy cancelado para preservar dados locais:" >&2
+  git status --short >&2
+  echo "Versione, guarde ou reverta as alteracoes antes de tentar novamente." >&2
+  exit 1
+fi
+
+echo "Fetching deploy/staging..."
+git fetch --prune origin deploy/staging
 git checkout deploy/staging
-git checkout -- .
-git pull origin deploy/staging
+git merge --ff-only origin/deploy/staging
 
 ./scripts/jetson_preflight.sh
 ./scripts/compose_jetson_up.sh

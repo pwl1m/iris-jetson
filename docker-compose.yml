@@ -26,8 +26,6 @@ services:
     environment:
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
-      GST_PLUGIN_PATH: /usr/lib/aarch64-linux-gnu/gstreamer-1.0
-      GST_PLUGIN_SYSTEM_PATH: /usr/lib/aarch64-linux-gnu/gstreamer-1.0
       FACE_MODEL_NAME: ${FACE_MODEL_NAME:-buffalo_m}
       FACE_DET_SIZE: ${FACE_DET_SIZE:-480,480}
       FACE_PROVIDERS: ${FACE_PROVIDERS:-TensorrtExecutionProvider,CUDAExecutionProvider,CPUExecutionProvider}
@@ -46,6 +44,7 @@ services:
       STREAM_MAX_CAPTURE_FILES: ${STREAM_MAX_CAPTURE_FILES:-2000}
       STREAM_CAPTURE_RETENTION_HOURS: ${STREAM_CAPTURE_RETENTION_HOURS:-48.0}
       STREAM_PREVIEW_UPDATE_INTERVAL_SECONDS: ${STREAM_PREVIEW_UPDATE_INTERVAL_SECONDS:-0.25}
+      STREAM_PREVIEW_ENABLED: ${STREAM_PREVIEW_ENABLED:-true}
       STREAM_PREVIEW_MAX_WIDTH: ${STREAM_PREVIEW_MAX_WIDTH:-640}
       STREAM_PREVIEW_JPEG_QUALITY: ${STREAM_PREVIEW_JPEG_QUALITY:-70}
       STREAM_READER_BUFFER_SIZE: ${STREAM_READER_BUFFER_SIZE:-1}
@@ -64,11 +63,7 @@ services:
       - ./iris-app/trt-engines:/data/trt-engines
       - /usr/local/cuda/targets/aarch64-linux/lib:/opt/jetson-libs/cuda:ro
       - ./runtime-libs:/opt/jetson-libs/system:ro
-      - /usr/lib/aarch64-linux-gnu/gstreamer-1.0:/usr/lib/aarch64-linux-gnu/gstreamer-1.0:ro
       - /usr/lib/aarch64-linux-gnu/tegra:/usr/lib/aarch64-linux-gnu/tegra:ro
-    devices:
-      - "${CAMERA_1_HOST_DEVICE:-/dev/video0}:${CAMERA_1_DEVICE:-/dev/video0}"
-      - "${CAMERA_2_HOST_DEVICE:-/dev/video2}:${CAMERA_2_DEVICE:-/dev/video2}"
     networks:
       - iris-lab
 

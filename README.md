@@ -10,6 +10,7 @@ Recorte operacional da stack facial para o NVIDIA Jetson Orin Nano. Esta pasta f
 - `scripts/`: instalacao, preflight, subida e testes do runtime.
 - `scripts/prepull_images.sh`: pre-pull manual das imagens para reduzir tempo no primeiro `up`.
 - `iris-app/`: API facial, worker de stream, embeddings, eventos e modelos.
+- `docs/ONIX_IRIS_VALIDATION.md`: contrato e validação operacional com Onix/Simtro.
 - `.env.example`: contrato de configuracao local.
 
 ## Subir No Jetson
@@ -19,7 +20,7 @@ cp .env.example .env
 ./scripts/install_jetson_dependencies.sh
 ./scripts/docker_doctor.sh
 ./scripts/jetson_preflight.sh
-docker compose up -d
+./scripts/compose_jetson_up.sh
 ```
 
 ## Parar
@@ -61,11 +62,11 @@ Segredos opcionais:
 - evitar reintroduzir fluxo de notebook aqui
 - registrar mudancas de modelo em `../docs/DECISIONS.md` e `../docs/MODEL_PLAN.md`
 
-No fluxo atual, o `iris-app` processa cada camera USB habilitada em um worker independente e registra eventos/capturas locais com `camera_id`. O `iris-go2rtc` expoe os mesmos dispositivos como streams separados (`usb_camera_1` e `usb_camera_2`).
+No fluxo atual, o `iris-go2rtc` e o unico dono V4L2 da USB e expoe cada camera como MJPEG. O `iris-app` consome o MJPEG interno em workers independentes, registra eventos/capturas locais com `camera_id` e publica a URL LAN configurada em `CAMERA_n_PUBLIC_STREAM_URL` para o Onix/ViewCare.
 
-Existe agora uma variante experimental para Jetson em que o `iris-app` pode consumir a camera USB diretamente por GStreamer/NVIDIA, sem depender do RTSP interno para inferencia.
+O modo USB direto por OpenCV/V4L2 e o `gst_usb_sampled` continuam disponiveis para benchmark, mas nao podem disputar a mesma camera com o go2rtc. O modo GStreamer amostrado usa `v4l2src ! jpegdec ! videorate ! appsink`; a C930e ainda precisa ser decodificada antes do `videorate`, portanto ele nao substitui automaticamente o perfil MJPEG atual.
 
 ## Perfil Base Da C930e
 
-Para o Jetson, o baseline atual e capturar a Logitech C930e em `1920x1080` usando `MJPG` na entrada V4L2 e restream RTSP para o stack.
+Para o Jetson, o baseline atual e capturar a Logitech C930e em `1920x1080` usando `MJPG` na entrada V4L2 e disponibilizar MJPEG pelo go2rtc para o Iris e observabilidade.
 Neste host, `YUYV` em `1080p` limita a camera a `5 fps`, enquanto `MJPG` preserva `1080p` com margem melhor para operacao futura com duas cameras.

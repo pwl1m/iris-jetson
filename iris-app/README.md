@@ -51,13 +51,49 @@ Aplicacao principal da Fase 1: API FastAPI, cadastro facial, reconhecimento e wo
 - `GET /`: inclui upload manual para cadastro e comparacao, preview da imagem enviada, crop detectado e lista de candidatos.
 - `GET /api-help`: referencia simples de endpoints.
 
+## Modos De Uso Da API
+
+O Iris nao expoe o video original como um servidor RTSP. O worker le a camera
+continuamente, atualiza um preview e seleciona frames para inferencia no
+intervalo configurado em `STREAM_CAPTURE_INTERVAL_SECONDS`.
+
+- Foto pontual: envie uma imagem para `POST /recognize` ou `POST /compare`.
+- Snapshot de evidencia: consulte `GET /captures/latest`, `GET /events` e as
+  imagens associadas. Uma captura existe apenas quando um evento foi gravado.
+- Preview continuo: use `GET /preview/stream.mjpg` ou o endpoint equivalente
+  por camera. E um stream MJPEG de observabilidade; assisti-lo nao aumenta a
+  taxa de inferencia.
+- Saude e taxa configurada: use `GET /health`, `GET /cameras` e
+  `GET /debug/pipeline`. Eles informam o ultimo frame/captura e o intervalo,
+  mas nao calculam FPS real de inferencia. Para medir FPS e latencia, execute
+  `./scripts/engine_validation.sh` durante uma janela de teste.
+
+Em `GET /health` e `GET /stream/status`, `no_face_detected` conta frames que
+foram processados corretamente, mas sem rosto detectavel. Esse caso nao e uma
+falha. `recognition_errors` fica reservado para excecoes reais do pipeline.
+
 ## Worker De Stream
 
 O worker usa `STREAM_SOURCE_KIND=jetson_gst_usb` como padrao no Jetson, abre cada dispositivo configurado em `CAMERA_n_DEVICE` via OpenCV `CAP_V4L2`, configura FOURCC `MJPG`, resolucao e FPS, processa uma captura por camera a cada `STREAM_CAPTURE_INTERVAL_SECONDS`, salva imagens em `CAPTURE_DIR` e grava eventos em `EVENT_LOG_PATH`.
 
-O pipeline atual ja separa detector, filtro de qualidade, crop de rosto e reconhecimento `buffalo_m`, conforme o plano em `../../docs/IRIS_PIPELINE_PLAN_2026-05-29.md`.
+O nome `jetson_gst_usb` identifica o perfil USB do Jetson, mas o caminho de producao atual e V4L2/OpenCV. O modo opcional `gst_usb_sampled` usa `v4l2src ! jpegparse ! jpegdec ! videorate drop-only=true ! appsink`; ele reduz leituras/copias no Python para a cadencia de captura, mas nao elimina o decode MJPEG anterior ao `videorate`. `nvjpegdec` foi testado com a C930e deste host e falhou na negociacao, portanto nao e usado como fallback automatico.
+
+`STREAM_PREVIEW_ENABLED=false` desliga apenas o preview JPEG/MJPEG da API. As imagens integrais usadas como evidencia e os eventos continuam sendo produzidos.
+
+O pipeline atual separa detector, filtro de qualidade, crop de rosto e reconhecimento `buffalo_m`.
 
 `STREAM_URL`/RTSP via `iris-go2rtc` fica apenas como fallback/observabilidade externa via compose dedicado.
+
+Quando o go2rtc e o dono da USB, `CAMERA_n_STREAM_URL` e o endereço interno
+consumido pelo worker (por exemplo, `http://iris-go2rtc:1984/...`).
+`CAMERA_n_PUBLIC_STREAM_URL` e o endereço que o endpoint `/cameras` publica
+para o Onix/ViewCare abrir no navegador (por exemplo, o IP LAN do Jetson).
+Os dois endereços podem, e normalmente devem, ser diferentes.
+
+O campo legado `stream` de `/health` representa a primeira câmera habilitada;
+`streams` continua sendo a fonte de status de todas as câmeras. Isso mantém a
+saúde do device consistente para o sincronizador Onix quando o slot primário
+está desabilitado e outra câmera está em operação.
 
 Cada evento contem:
 
@@ -87,6 +123,24 @@ O worker tambem pode gravar oclusao com `occlusion_reason=suspected_visual_occlu
 O payload contem `event_id`, `event_type=occlusion`, `occlusion_class`, `captured_at`, `camera_id`, URLs de frame/crop, `detector`, `quality`, `recognition` e o bloco `occlusion` com landmarks, taxa de oclusao, indicador de mudanca subita e landmarks anteriores.
 
 Esse contrato permite ao `new_structure` sincronizar e expor no dominio publico `/api/viewcare/iris/*` tanto o caso "sujeito cadastrado fez oclusao parcial" quanto o caso "rosto desconhecido tentou esconder o rosto".
+
+## Integracoes Remotas Opcionais
+
+O reconhecimento e a persistencia local funcionam sem Onix e sem MQTT. As duas
+integracoes sao canais de saida independentes e iniciam desligadas:
+
+- `ONIX_PUSH_ENABLED=true` envia cada evento por HTTP POST para
+  `ONIX_PUSH_URL`, autenticado com `ONIX_PUSH_TOKEN` e identificado por
+  `ONIX_PUSH_DEVICE_UID`.
+- `MQTT_PUBLISH_ENABLED=true` publica eventos, oclusoes e snapshots de sujeitos
+  no broker definido por `MQTT_PUBLISH_HOST`. Para uso estritamente local, esse
+  host pode ser `iris-mosquitto`; para integracao central, deve ser o broker
+  central.
+
+As filas de ambos os canais ficam em memoria. Elas evitam bloquear a inferencia,
+mas nao constituem uma fila duravel: indisponibilidade prolongada, fila cheia ou
+reinicio podem descartar mensagens. A reconciliacao por `GET /events` continua
+necessaria quando entrega garantida for requisito.
 
 ## Cameras
 

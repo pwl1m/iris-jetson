@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import queue
 import socket
 import threading
@@ -17,21 +18,29 @@ import paho.mqtt.client as mqtt
 from .cameras import configured_cameras
 from .detector import InsightFaceDetector
 from .pipeline import IrisPipeline
-from .recognizer import InsightFaceRecognizer, cosine_similarity, decode_image
+from .recognizer import NoFaceDetectedError, InsightFaceRecognizer, cosine_similarity, decode_image
 from .schemas import CameraConfig
 from .settings import Settings
 from .storage import FaceStore, find_jsonl_event, read_jsonl_events
 
 
 class _GstUsbCapture:
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: Settings, camera: CameraConfig, sampled: bool = False):
         self.settings = settings
+        self.camera = camera
+        self.sampled = sampled
         self._gst = None
         self._pipeline = None
         self._sink = None
         self._opened = False
 
     def open(self) -> bool:
+        if self.sampled:
+            # The container image already carries the software elements used by
+            # this pipeline. Do not scan the host JetPack plugin directory here:
+            # it is mounted for NVIDIA elements but has a different GLib ABI.
+            os.environ.pop("GST_PLUGIN_PATH", None)
+            os.environ.pop("GST_PLUGIN_SYSTEM_PATH", None)
         try:
             import gi
         except ImportError:
@@ -94,18 +103,25 @@ class _GstUsbCapture:
         self._opened = False
 
     def _default_pipeline(self) -> str:
-        device = self.settings.usb_camera_device
-        width = self.settings.usb_camera_width
-        height = self.settings.usb_camera_height
-        fps = max(1, self.settings.usb_camera_fps)
+        device = self.camera.device or self.settings.usb_camera_device
+        width = self.camera.width or self.settings.usb_camera_width
+        height = self.camera.height or self.settings.usb_camera_height
+        fps = max(1, self.camera.fps or self.settings.usb_camera_fps)
         input_format = self.settings.usb_camera_input_format.strip().lower()
 
-        if input_format == "mjpeg":
+        if input_format in {"mjpeg", "mjpg"}:
+            sample_branch = ""
+            if self.sampled:
+                # videorate is after jpegdec because it operates on raw video.
+                # This still decodes upstream MJPEG, but drops before appsink so
+                # Python only maps/copies frames selected for inference.
+                interval = max(1, round(self.settings.stream_capture_interval_seconds))
+                sample_branch = f"videorate drop-only=true ! video/x-raw,framerate=1/{interval} ! "
             return (
                 f"v4l2src device={device} io-mode=2 do-timestamp=true ! "
                 f"image/jpeg,width={width},height={height},framerate={fps}/1 ! "
-                "jpegparse ! nvjpegdec ! "
-                "nvvidconv ! video/x-raw,format=BGRx ! "
+                "jpegparse ! jpegdec ! "
+                f"{sample_branch}"
                 "videoconvert ! video/x-raw,format=BGR ! "
                 "appsink name=irisappsink drop=true max-buffers=1 sync=false"
             )
@@ -131,8 +147,10 @@ class _CameraWorkerState:
             "events_written": 0,
             "occlusions_written": 0,
             "frames_read": 0,
+            "no_face_detected": 0,
             "recognition_errors": 0,
             "last_occlusion_at": None,
+            "last_no_face_at": None,
             "last_capture_at": None,
             "last_event_at": None,
             "last_error": None,
@@ -335,7 +353,7 @@ class IrisRuntime:
                     "primary": camera.primary,
                     "source_kind": camera.source_kind,
                     "device": camera.device,
-                    "stream_url": camera.stream_url,
+                    "stream_url": camera.public_stream_url or camera.stream_url,
                     "input_format": camera.input_format,
                     "width": camera.width,
                     "height": camera.height,
@@ -512,7 +530,14 @@ class IrisRuntime:
         return report
 
     def stream_status(self, camera_id: str | None = None) -> dict:
-        camera_id = camera_id or self.settings.camera_1_id
+        if camera_id is None:
+            # The legacy top-level `stream` field is consumed by Onix health
+            # checks. Point it at an enabled camera instead of a disabled
+            # primary slot; per-camera status remains available in `streams`.
+            camera_id = next(
+                (camera.camera_id for camera in self.cameras if camera.enabled),
+                self.settings.camera_1_id,
+            )
         state = self._camera_workers[camera_id]
         with state.stats_lock:
             stats = dict(state.stats)
@@ -752,7 +777,7 @@ class IrisRuntime:
                     self._increment_stat(state, "frames_read")
                     now = time.monotonic()
                     self._update_preview(state, frame, now)
-                    if now - last_processed < self.settings.stream_capture_interval_seconds:
+                    if camera.source_kind != "gst_usb_sampled" and now - last_processed < self.settings.stream_capture_interval_seconds:
                         continue
                     last_processed = now
 
@@ -767,7 +792,7 @@ class IrisRuntime:
         self.logger.info("stream worker stopped camera=%s", camera.camera_id)
 
     def _wait_for_stream_source(self, camera: CameraConfig, state: _CameraWorkerState) -> None:
-        if camera.source_kind in {"jetson_gst_usb", "usb"}:
+        if camera.source_kind in {"jetson_gst_usb", "usb", "gst_usb_sampled"}:
             return
 
         parsed = urllib.parse.urlparse(camera.stream_url)
@@ -826,9 +851,16 @@ class IrisRuntime:
             capture.set(cv2.CAP_PROP_FPS, float(self.settings.usb_camera_fps))
             return capture
 
+        if camera.source_kind == "gst_usb_sampled":
+            capture = _GstUsbCapture(self.settings, camera, sampled=True)
+            capture.open()
+            return capture
+
         return cv2.VideoCapture(camera.stream_url, cv2.CAP_FFMPEG)
 
     def _update_preview(self, state: _CameraWorkerState, frame: np.ndarray, now_monotonic: float) -> None:
+        if not self.settings.stream_preview_enabled:
+            return
         if now_monotonic - state.last_preview_update_monotonic < self.settings.stream_preview_update_interval_seconds:
             return
         state.last_preview_update_monotonic = now_monotonic
@@ -1228,6 +1260,9 @@ class IrisRuntime:
                 recognition.get("subject"),
                 recognition.get("similarity"),
             )
+        except NoFaceDetectedError:
+            self._increment_stat(state, "no_face_detected")
+            self._set_stats(state, last_no_face_at=captured_at, last_error=None)
         except ValueError as exc:
             self._increment_stat(state, "recognition_errors")
             self._set_stats(state, last_error=str(exc))

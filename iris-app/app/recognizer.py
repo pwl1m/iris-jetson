@@ -2,6 +2,10 @@ import cv2
 import numpy as np
 
 
+class NoFaceDetectedError(ValueError):
+    """A imagem foi processada corretamente, mas nao contem um rosto detectavel."""
+
+
 def decode_image(data: bytes) -> np.ndarray:
     image = cv2.imdecode(np.frombuffer(data, dtype=np.uint8), cv2.IMREAD_COLOR)
     if image is None:
@@ -102,7 +106,7 @@ class InsightFaceRecognizer:
     def _best_face(self, image: np.ndarray):
         faces = self.app.get(image)
         if not faces:
-            raise ValueError("nenhum rosto detectado")
+            raise NoFaceDetectedError("nenhum rosto detectado")
         return max(faces, key=lambda item: float((item.bbox[2] - item.bbox[0]) * (item.bbox[3] - item.bbox[1])))
 
     def _metadata(self, face) -> dict:

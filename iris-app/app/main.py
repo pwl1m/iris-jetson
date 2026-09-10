@@ -196,7 +196,7 @@ _DASHBOARD_HTML = """\
   .image-wrap{position:relative;background:#08090a;aspect-ratio:16/9;display:flex;align-items:center;justify-content:center}
   .image-wrap img{width:100%;height:100%;object-fit:contain;display:block}
   .empty{color:#66707a;font-size:14px}
-  .status-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;padding:12px}
+  .status-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;padding:12px}
   .controls{display:grid;grid-template-columns:1fr 1fr auto;gap:8px;padding:12px;border-top:1px solid #292f35}
   input,select,button{height:36px;border-radius:6px;border:1px solid #303842;background:#101317;color:#e7e9ea;padding:0 10px;font:inherit;font-size:13px}
   button{cursor:pointer;background:#223145;border-color:#385272}
@@ -255,7 +255,8 @@ _DASHBOARD_HTML = """\
       <div class="metric"><div class="label">Capturas</div><div class="value" id="capturesSeen">0</div></div>
       <div class="metric"><div class="label">Eventos</div><div class="value" id="eventsWritten">0</div></div>
       <div class="metric"><div class="label">Frames</div><div class="value" id="framesRead">0</div></div>
-      <div class="metric"><div class="label">Erros</div><div class="value" id="errors">0</div></div>
+      <div class="metric"><div class="label">Sem rosto</div><div class="value" id="noFaceDetected">0</div></div>
+      <div class="metric"><div class="label">Falhas</div><div class="value" id="errors">0</div></div>
     </div>
     <div class="controls">
       <select id="subjectSelect"></select>
@@ -364,6 +365,7 @@ let knownSubjects = [];
 let activeSubject = "";
 let streamRunning = false;
 let streamPreviewReady = false;
+let previewCameraId = null;
 let latestFallbackImageUrl = null;
 let enrollUploadUrl = null;
 let compareUploadUrl = null;
@@ -571,7 +573,7 @@ function refreshPreviewImage() {
   const empty = document.getElementById("emptyImage");
   if (streamRunning && streamPreviewReady) {
     if (image.dataset.source !== "stream") {
-      image.src = "/preview/stream.mjpg";
+      image.src = `/cameras/${encodeURIComponent(previewCameraId)}/preview/stream.mjpg`;
       image.dataset.source = "stream";
     }
     image.hidden = false;
@@ -599,11 +601,13 @@ async function refresh() {
   const health = await healthRes.json();
   const captures = await capturesRes.json();
   const subjectsPayload = await subjectsRes.json();
-  const stream = health.stream || {};
+  const streams = health.streams || [];
+  const stream = streams.find(item => item.enabled && item.running && item.thread_alive) || health.stream || {};
   const events = captures.events || [];
   const latest = events[0];
   streamRunning = Boolean(stream.running);
   streamPreviewReady = Boolean(stream.preview_at);
+  previewCameraId = stream.camera_id || null;
   latestFallbackImageUrl = latest && latest.image_url ? latest.image_url : null;
   knownSubjects = subjectsPayload.subjects || [];
   renderSubjects(knownSubjects);
@@ -613,6 +617,7 @@ async function refresh() {
   document.getElementById("capturesSeen").textContent = fmt(stream.captures_seen);
   document.getElementById("eventsWritten").textContent = fmt(stream.events_written);
   document.getElementById("framesRead").textContent = fmt(stream.frames_read);
+  document.getElementById("noFaceDetected").textContent = fmt(stream.no_face_detected);
   document.getElementById("errors").textContent = fmt(stream.recognition_errors);
   document.getElementById("lastError").textContent = stream.last_error || "-";
 

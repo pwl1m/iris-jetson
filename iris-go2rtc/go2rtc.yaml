@@ -3,11 +3,11 @@ api:
 
 streams:
   usb_camera:
-    - "ffmpeg:device?video=${CAMERA_1_INDEX:-0}&input_format=${USB_CAMERA_INPUT_FORMAT:-mjpeg}&video_size=${USB_CAMERA_WIDTH:-1920}x${USB_CAMERA_HEIGHT:-1080}&framerate=${USB_CAMERA_FPS:-15}#video=h264"
+    - "v4l2:device?video=/dev/video${CAMERA_1_INDEX:-0}&input_format=${USB_CAMERA_INPUT_FORMAT:-mjpeg}&video_size=${USB_CAMERA_WIDTH:-1920}x${USB_CAMERA_HEIGHT:-1080}&framerate=${USB_CAMERA_FPS:-15}"
   usb_camera_1:
-    - "ffmpeg:device?video=${CAMERA_1_INDEX:-0}&input_format=${USB_CAMERA_INPUT_FORMAT:-mjpeg}&video_size=${USB_CAMERA_WIDTH:-1920}x${USB_CAMERA_HEIGHT:-1080}&framerate=${USB_CAMERA_FPS:-15}#video=h264"
+    - "v4l2:device?video=/dev/video${CAMERA_1_INDEX:-0}&input_format=${USB_CAMERA_INPUT_FORMAT:-mjpeg}&video_size=${USB_CAMERA_WIDTH:-1920}x${USB_CAMERA_HEIGHT:-1080}&framerate=${USB_CAMERA_FPS:-15}"
   usb_camera_2:
-    - "ffmpeg:device?video=${CAMERA_2_INDEX:-2}&input_format=${USB_CAMERA_INPUT_FORMAT:-mjpeg}&video_size=${USB_CAMERA_WIDTH:-1920}x${USB_CAMERA_HEIGHT:-1080}&framerate=${USB_CAMERA_FPS:-15}#video=h264"
+    - "v4l2:device?video=/dev/video${CAMERA_2_INDEX:-2}&input_format=${USB_CAMERA_INPUT_FORMAT:-mjpeg}&video_size=${USB_CAMERA_WIDTH:-1920}x${USB_CAMERA_HEIGHT:-1080}&framerate=${USB_CAMERA_FPS:-15}"
 
 rtsp:
   listen: ":8554"

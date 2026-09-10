@@ -1,6 +1,8 @@
 # iris-mosquitto
 
-Broker MQTT local usado pelo `iris-app` e por integracoes locais.
+Broker MQTT local disponivel para o `iris-app` e integracoes locais. A
+publicacao pelo Iris fica desligada por padrao; para usa-la localmente, configure
+`MQTT_PUBLISH_ENABLED=true` e `MQTT_PUBLISH_HOST=iris-mosquitto` no `.env`.
 
 ## Conteudo
 
