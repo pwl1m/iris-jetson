@@ -62,7 +62,7 @@ Segredos opcionais:
 - evitar reintroduzir fluxo de notebook aqui
 - registrar mudancas de modelo em `../docs/DECISIONS.md` e `../docs/MODEL_PLAN.md`
 
-No fluxo atual, o `iris-go2rtc` e o unico dono V4L2 da USB e expoe cada camera como MJPEG. O `iris-app` consome o MJPEG interno em workers independentes, registra eventos/capturas locais com `camera_id` e publica a URL LAN configurada em `CAMERA_n_PUBLIC_STREAM_URL` para o Onix/ViewCare.
+No fluxo atual, o `iris-go2rtc` e o unico dono V4L2 da USB e expoe cada camera como MJPEG. O `iris-app` consome o MJPEG interno em workers independentes, registra eventos/capturas locais com `camera_id` e publica os transportes configurados para o Onix/ViewCare. Use `CAMERA_n_LAN_STREAM_URL` para a LAN e `CAMERA_n_TAILSCALE_STREAM_URL` para clientes Tailnet; `CAMERA_n_PUBLIC_STREAM_URL` permanece como fallback LAN de compatibilidade.
 
 O modo USB direto por OpenCV/V4L2 e o `gst_usb_sampled` continuam disponiveis para benchmark, mas nao podem disputar a mesma camera com o go2rtc. O modo GStreamer amostrado usa `v4l2src ! jpegdec ! videorate ! appsink`; a C930e ainda precisa ser decodificada antes do `videorate`, portanto ele nao substitui automaticamente o perfil MJPEG atual.
 

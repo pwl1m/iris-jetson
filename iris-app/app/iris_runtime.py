@@ -354,6 +354,9 @@ class IrisRuntime:
                     "source_kind": camera.source_kind,
                     "device": camera.device,
                     "stream_url": camera.public_stream_url or camera.stream_url,
+                    # Consumed internally by the Onix resolver. The browser
+                    # still receives only the selected stream_url from /stream.
+                    "stream_urls": camera.public_stream_urls,
                     "input_format": camera.input_format,
                     "width": camera.width,
                     "height": camera.height,

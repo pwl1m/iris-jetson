@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 
@@ -9,6 +9,7 @@ class CameraConfig:
     stream_url: str
     enabled: bool
     public_stream_url: str | None = None
+    public_stream_urls: dict[str, str] = field(default_factory=dict)
     primary: bool = False
     source_kind: str | None = None
     device: str | None = None
