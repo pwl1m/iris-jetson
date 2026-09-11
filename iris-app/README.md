@@ -86,9 +86,12 @@ O pipeline atual separa detector, filtro de qualidade, crop de rosto e reconheci
 
 Quando o go2rtc e o dono da USB, `CAMERA_n_STREAM_URL` e o endereço interno
 consumido pelo worker (por exemplo, `http://iris-go2rtc:1984/...`).
-`CAMERA_n_PUBLIC_STREAM_URL` e o endereço que o endpoint `/cameras` publica
-para o Onix/ViewCare abrir no navegador (por exemplo, o IP LAN do Jetson).
-Os dois endereços podem, e normalmente devem, ser diferentes.
+`CAMERA_n_LAN_STREAM_URL` e `CAMERA_n_TAILSCALE_STREAM_URL` são os endereços
+que o endpoint `/cameras` publica no inventário para o Onix/ViewCare resolver
+automaticamente conforme a rede do operador. `CAMERA_n_PUBLIC_STREAM_URL`
+continua como fallback LAN legado. O endpoint público do ViewCare devolve uma
+única URL escolhida, nunca o mapa completo ao navegador. Os endereços internos
+e de visualização podem, e normalmente devem, ser diferentes.
 
 O campo legado `stream` de `/health` representa a primeira câmera habilitada;
 `streams` continua sendo a fonte de status de todas as câmeras. Isso mantém a

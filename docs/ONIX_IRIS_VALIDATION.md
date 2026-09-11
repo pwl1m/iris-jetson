@@ -1,6 +1,6 @@
 # Validação Onix ↔ Iris
 
-Data da validação: 2026-09-10 (America/Sao_Paulo).
+Data da validação: 2026-09-11 (America/Sao_Paulo).
 
 ## Topologia em operação
 
@@ -8,12 +8,16 @@ Data da validação: 2026-09-10 (America/Sao_Paulo).
 C930e USB -> go2rtc (único dono V4L2) -> MJPEG público
                                          -> iris-app (MJPEG interno)
 iris-app -> API HTTP / MQTT -> sincronização Iris no Onix -> /api/viewcare/iris/* -> Simtro
+                                                                  |                     |
+                                                           resolve LAN/Tailnet      MJPEG direto
 ```
 
 O `CAMERA_n_STREAM_URL` é usado internamente pelo `iris-app`, via DNS Docker
-`iris-go2rtc`. O `CAMERA_n_PUBLIC_STREAM_URL` é o endereço LAN publicado em
-`GET /cameras`, persistido pelo Onix e destinado ao browser/ViewCare. Não usar
-a URL interna como URL pública.
+`iris-go2rtc`. Para visualização, o Iris publica `stream_urls` no inventário:
+`CAMERA_n_LAN_STREAM_URL` para a LAN e
+`CAMERA_n_TAILSCALE_STREAM_URL` para a Tailnet. O legado
+`CAMERA_n_PUBLIC_STREAM_URL` permanece como fallback LAN durante a migração.
+Não usar a URL interna como URL pública.
 
 ## Resultado da validação autenticada
 
@@ -47,11 +51,10 @@ todas as câmeras em `streams`.
 
 ## Stream no Simtro
 
-O backend Onix persiste e entrega `stream_url` no contrato de câmera. O schema
-do Simtro já aceita esse campo, mas a interface ainda não possui um componente
-que o abra ou renderize. A implementação de UI deve usar o `stream_url`
-retornado pela API, por exemplo em uma ação "Abrir câmera"; não deve montar
-URLs por conta própria nem expor o hostname Docker do Jetson.
+O backend Onix persiste os transportes publicados pelo Iris, mas entrega ao
+browser somente um `stream_url` já resolvido. O componente **Câmera ao vivo**
+do SIMTRO usa essa URL como `src` do MJPEG; ele não monta URLs do Jetson, não
+expõe a lista de transportes e não retransmite vídeo pelo Onix.
 
 ### Qualidade, desempenho e banda
 
@@ -77,6 +80,18 @@ o campo `stream_url` é o MJPEG público do go2rtc. O front pode utilizá-lo com
 frames. `available=false` sinaliza que a câmera está cadastrada, mas sem URL
 ou sem estado online.
 
+### Seleção automática de rede
+
+O SIMTRO determina o contexto sem apresentar escolha ao operador: quando ele é
+aberto por um IP Tailscale (`100.64.0.0/10`), chama o endpoint com
+`network=tailnet`; quando é aberto por uma faixa privada RFC1918, usa
+`network=lan`. O Onix então devolve exclusivamente a URL correspondente. O
+mapa interno `stream_urls` nunca integra a resposta consumida pelo front.
+
+Esse mecanismo não torna uma URL LAN roteável pela Tailnet: ele entrega o
+transporte que o navegador já consegue alcançar. Hostnames futuros precisam
+de um contexto de rede explícito no mesmo resolvedor, sem criar seletor na UI.
+
 Exemplo de resposta (campos estáveis):
 
 ```json
@@ -85,7 +100,7 @@ Exemplo de resposta (campos estáveis):
     "camera_id": 18,
     "camera_key": "entrada_2",
     "name": "ENTRADA 2",
-    "stream_url": "http://<jetson-lan>:1984/api/stream.mjpeg?src=usb_camera_2",
+    "stream_url": "http://<jetson-tailnet-ou-lan>:1984/api/stream.mjpeg?src=usb_camera_2",
     "render_mode": "mjpeg",
     "content_type": "multipart/x-mixed-replace",
     "available": true,
@@ -104,8 +119,9 @@ controlador. O fluxo é:
 1. Conectar a câmera em controlador USB apropriado, identificar seu serial e
    aprová-lo no runtime.
 2. Criar `usb_camera_3` no go2rtc, com mapeamento V4L2 exclusivo para ela.
-3. Configurar `CAMERA_3_*`: `ENABLED=true`, fonte `http_mjpeg`, URL interna e
-   `CAMERA_3_PUBLIC_STREAM_URL` LAN.
+3. Configurar `CAMERA_3_*`: `ENABLED=true`, fonte `http_mjpeg`, URL interna,
+   `CAMERA_3_LAN_STREAM_URL` e, quando aplicável,
+   `CAMERA_3_TAILSCALE_STREAM_URL`.
 4. O Iris inicia um worker próprio e grava eventos com `camera_id=entrada_3`.
 5. O próximo sync cria/atualiza a segunda linha de câmera no Onix; os eventos
    continuam separados por `camera_id` e serial.
