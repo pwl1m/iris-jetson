@@ -37,6 +37,16 @@ embedding nem muda a logica de reconhecimento do Jetson.
 5. O ViewCare grava o marcador de risco e a auditoria de operador. Embeddings
    e imagens permanecem no Jetson.
 
+## Evidencia dos alertas
+
+Cada tentativa de oclusao grava no Iris o frame completo e, quando ha uma
+deteccao facial, o recorte da face. Os endpoints locais sao
+`GET /occlusions/{jetson_event_id}/frame.jpg` e
+`GET /occlusions/{jetson_event_id}/face.jpg`; o backend ViewCare os publica
+pelas rotas autenticadas `/api/viewcare/iris/oculto/{occlusionId}/frame` e
+`/face`. O ID do alerta central nao e necessariamente o ID da oclusao de
+origem; a integracao deve usar `source.id` para localizar a evidencia.
+
 ## Contrato do backend ViewCare
 
 O frontend futuro deve chamar apenas as rotas autenticadas do ViewCare. Elas
