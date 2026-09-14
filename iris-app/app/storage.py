@@ -80,6 +80,14 @@ class FaceStore:
             cursor = conn.execute("DELETE FROM face_embeddings WHERE subject = ?", (subject,))
             return int(cursor.rowcount)
 
+    def rename_subject(self, subject: str, new_subject: str) -> int:
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "UPDATE face_embeddings SET subject = ? WHERE subject = ?",
+                (new_subject, subject),
+            )
+            return int(cursor.rowcount)
+
     def samples(self, subject: str) -> list[dict]:
         with self._connect() as conn:
             rows = conn.execute(

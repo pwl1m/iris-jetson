@@ -798,6 +798,29 @@ def camera_status(camera_id: str) -> dict:
         raise HTTPException(status_code=404, detail="camera nao encontrada") from exc
 
 
+@app.get("/cameras/{camera_id}/enrollment/latest.jpg")
+def latest_camera_enrollment_image(camera_id: str) -> Response:
+    try:
+        payload = runtime.latest_enrollment_jpeg(camera_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="camera nao encontrada") from exc
+    if not payload:
+        raise HTTPException(status_code=409, detail="aguarde uma captura atual da camera")
+    return Response(content=payload, media_type="image/jpeg", headers={"Cache-Control": "no-store, max-age=0"})
+
+
+@app.post("/cameras/{camera_id}/enroll")
+def enroll_latest_camera_frame(camera_id: str, subject: str = Form(...)) -> dict:
+    try:
+        return runtime.enroll_latest_camera_frame(camera_id, subject)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="camera nao encontrada") from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=409, detail="aguarde uma captura atual da camera") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @app.post("/cameras/{camera_id}/start")
 def camera_start(camera_id: str) -> dict:
     try:
@@ -826,6 +849,16 @@ def subjects() -> dict:
 @app.delete("/subjects/{subject}")
 def delete_subject(subject: str) -> dict:
     return runtime.delete_subject(subject)
+
+
+@app.patch("/subjects/{subject}")
+def rename_subject(subject: str, new_subject: str = Form(...)) -> dict:
+    try:
+        return runtime.rename_subject(subject, new_subject)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="sujeito nao encontrado") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.get("/subjects/{subject}/samples")

@@ -22,12 +22,15 @@ Aplicacao principal da Fase 1: API FastAPI, cadastro facial, reconhecimento e wo
 - `POST /cameras/{camera_id}/start`
 - `POST /cameras/{camera_id}/stop`
 - `GET /subjects`
+- `PATCH /subjects/{subject}` (`new_subject` em `multipart/form-data`)
 - `DELETE /subjects/{subject}`
 - `GET /subjects/{subject}/samples`
 - `POST /enroll`
 - `POST /recognize`
 - `POST /compare`
 - `DELETE /samples/{sample_id}`
+- `GET /cameras/{camera_id}/enrollment/latest.jpg`
+- `POST /cameras/{camera_id}/enroll` (`subject` em `multipart/form-data`)
 - `GET /stream/status`
 - `POST /stream/start`
 - `POST /stream/stop`
@@ -50,6 +53,24 @@ Aplicacao principal da Fase 1: API FastAPI, cadastro facial, reconhecimento e wo
 - `GET /`: dashboard operacional com captura atual, log de comparacoes, cadastro por captura e gerenciamento de sujeitos/amostras.
 - `GET /`: inclui upload manual para cadastro e comparacao, preview da imagem enviada, crop detectado e lista de candidatos.
 - `GET /api-help`: referencia simples de endpoints.
+
+## Gestao remota de cadastros
+
+O Iris continua sendo a fonte de verdade para embeddings e fotos de referencia.
+Uma interface remota deve falar com estes endpoints por meio do backend do
+ViewCare, nunca diretamente pelo navegador.
+
+- Renomear: `PATCH /subjects/{subject}` com `new_subject` em multipart. A
+  operacao preserva todas as amostras e os respectivos IDs.
+- Fotos: `GET /subjects/{subject}/samples` lista as amostras atuais; cada foto
+  esta disponivel em `GET /samples/{sample_id}/image`. `DELETE /samples/{id}`
+  remove apenas a amostra indicada.
+- Upload: `POST /enroll` recebe uma foto externa e extrai o embedding no
+  Jetson. Uma pessoa pode receber varias amostras pelo mesmo nome.
+- Camera: o preview MJPEG/go2rtc serve somente para enquadramento. Para
+  cadastro, use `POST /cameras/{camera_id}/enroll` com `subject` em multipart; ele usa o
+  ultimo frame de resolucao operacional processado pelo worker do Iris, nao o
+  frame reduzido de preview nem uma captura feita pelo navegador.
 
 ## Modos De Uso Da API
 

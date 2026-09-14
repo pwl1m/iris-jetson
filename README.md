@@ -11,6 +11,7 @@ Recorte operacional da stack facial para o NVIDIA Jetson Orin Nano. Esta pasta f
 - `scripts/prepull_images.sh`: pre-pull manual das imagens para reduzir tempo no primeiro `up`.
 - `iris-app/`: API facial, worker de stream, embeddings, eventos e modelos.
 - `docs/ONIX_IRIS_VALIDATION.md`: contrato e validação operacional com Onix/Simtro.
+- `docs/IRIS_SUBJECT_MANAGEMENT.md`: contrato para gestão remota de pessoas, fotos e captura pelo Iris.
 - `.env.example`: contrato de configuracao local.
 
 ## Subir No Jetson

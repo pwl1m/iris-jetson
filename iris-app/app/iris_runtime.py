@@ -167,6 +167,8 @@ class _CameraWorkerState:
         self.latest_event: dict | None = None
         self.latest_preview_jpeg: bytes | None = None
         self.latest_preview_at: str | None = None
+        self.latest_enrollment_jpeg: bytes | None = None
+        self.latest_enrollment_at: str | None = None
         self.last_preview_update_monotonic = 0.0
         self.last_landmarks = 0
 
@@ -284,6 +286,20 @@ class IrisRuntime:
             self._delete_reference_image(int(sample["id"]))
         self._publish_subjects_snapshot()
         return {"status": "deleted", "subject": subject, "deleted": deleted}
+
+    def rename_subject(self, subject: str, new_subject: str) -> dict:
+        subject = subject.strip()
+        new_subject = new_subject.strip()
+        if not subject or not new_subject:
+            raise ValueError("nome atual e novo nome sao obrigatorios")
+        if subject == new_subject:
+            return {"status": "unchanged", "subject": subject, "renamed": 0}
+
+        renamed = self.store.rename_subject(subject, new_subject)
+        if not renamed:
+            raise FileNotFoundError(subject)
+        self._publish_subjects_snapshot()
+        return {"status": "renamed", "subject": new_subject, "previous_subject": subject, "renamed": renamed}
 
     def subject_samples(self, subject: str) -> dict:
         samples = []
@@ -557,6 +573,24 @@ class IrisRuntime:
         state = self._camera_workers[camera_id]
         with state.preview_lock:
             return state.latest_preview_jpeg
+
+    def latest_enrollment_jpeg(self, camera_id: str) -> bytes | None:
+        state = self._camera_workers[camera_id]
+        with state.preview_lock:
+            payload = state.latest_enrollment_jpeg
+        if not payload or not self._stream_is_healthy(self.stream_status(camera_id)):
+            return None
+        return payload
+
+    def enroll_latest_camera_frame(self, camera_id: str, subject: str) -> dict:
+        payload = self.latest_enrollment_jpeg(camera_id)
+        if not payload:
+            raise FileNotFoundError(camera_id)
+        return self.enroll(
+            subject=subject,
+            filename=f"camera_{camera_id}_{self._now().replace(':', '').replace('+', 'Z')}.jpg",
+            payload=payload,
+        )
 
     def recent_events(self, limit: int = 20, camera_id: str | None = None, since: str | None = None) -> dict:
         return self._recent_events(limit=limit, camera_id=camera_id, since=since)
@@ -890,6 +924,18 @@ class IrisRuntime:
             state.latest_preview_jpeg = encoded.tobytes()
             state.latest_preview_at = self._now()
 
+    def _update_enrollment_frame(self, state: _CameraWorkerState, frame: np.ndarray, captured_at: str) -> None:
+        ok, encoded = cv2.imencode(
+            ".jpg",
+            frame,
+            [int(cv2.IMWRITE_JPEG_QUALITY), 95, int(cv2.IMWRITE_JPEG_PROGRESSIVE), 0],
+        )
+        if not ok:
+            return
+        with state.preview_lock:
+            state.latest_enrollment_jpeg = encoded.tobytes()
+            state.latest_enrollment_at = captured_at
+
     def _occlusion_log(self) -> Path:
         path = Path(self.settings.occlusion_log_path)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -1158,6 +1204,7 @@ class IrisRuntime:
         capture_number = self._increment_stat(state, "captures_seen")
         captured_at = self._now()
         self._set_stats(state, last_capture_at=captured_at)
+        self._update_enrollment_frame(state, frame, captured_at)
 
         try:
             with self._recognizer_lock:
