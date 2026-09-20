@@ -20,6 +20,21 @@ def public_stream_urls(lan_url: str, tailscale_url: str, legacy_url: str) -> dic
     return urls
 
 
+def inventory_stream_url(source_kind: str | None, public_stream_url: str | None, source_stream_url: str) -> str:
+    """Return only a browser-facing URL for the external camera inventory.
+
+    The IP engine endpoint is an authenticated, container-private frame
+    contract.  It must never be handed to Onix/ViewCare as if it were a
+    browser preview URL.
+    """
+    public_url = (public_stream_url or "").strip()
+    if public_url:
+        return public_url
+    if (source_kind or "").strip().lower() == "ip_engine":
+        return ""
+    return (source_stream_url or "").strip()
+
+
 def configured_cameras(settings: Settings) -> list[CameraConfig]:
     # Cameras 1-2 possuem workers independentes quando habilitadas. As demais
     # continuam rastreaveis para preservar o contrato de ate quatro cameras.
@@ -33,7 +48,7 @@ def configured_cameras(settings: Settings) -> list[CameraConfig]:
             settings.camera_1_enabled,
             True,
             settings.camera_1_source_kind or settings.stream_source_kind_normalized,
-            settings.camera_1_device or settings.usb_camera_device,
+            settings.camera_1_device,
             settings.camera_1_serial,
             settings.camera_1_model,
             settings.camera_1_stable_path,
@@ -85,6 +100,8 @@ def configured_cameras(settings: Settings) -> list[CameraConfig]:
     cameras = []
     for camera_id, stream_url, public_stream_url, lan_stream_url, tailscale_stream_url, enabled, primary, source_kind, device, serial, model, stable_path in specs:
         effective_source_kind = source_kind or ("rtsp" if stream_url else None)
+        usb_source = effective_source_kind in {"jetson_gst_usb", "usb", "gst_usb_sampled", "http_mjpeg"}
+        effective_device = (device or settings.usb_camera_device) if usb_source else (device or None)
         stream_urls = public_stream_urls(lan_stream_url, tailscale_stream_url, public_stream_url)
         cameras.append(
             CameraConfig(
@@ -95,7 +112,7 @@ def configured_cameras(settings: Settings) -> list[CameraConfig]:
                 public_stream_urls=stream_urls,
                 primary=primary,
                 source_kind=effective_source_kind,
-                device=device or None,
+                device=effective_device,
                 input_format=settings.usb_camera_input_format
                 if effective_source_kind in {"jetson_gst_usb", "usb", "gst_usb_sampled", "http_mjpeg"}
                 else None,

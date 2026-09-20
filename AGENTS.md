@@ -22,5 +22,5 @@ Esta pasta representa o futuro repositorio de deploy do Jetson Orin Nano. O foco
 
 ## Mudancas De Modelo
 
-- Antes de trocar modelo facial ou detector, registrar motivo e impacto em `../docs/DECISIONS.md`.
-- Toda alteracao que afete a estrategia de modelos deve refletir `../docs/MODEL_PLAN.md`.
+- Antes de trocar modelo facial ou detector, registrar motivo e impacto em `docs/DECISIONS.md`.
+- Toda alteracao que afete a estrategia de modelos deve refletir `docs/MODEL_PLAN.md`.

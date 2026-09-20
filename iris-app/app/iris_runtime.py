@@ -15,8 +15,10 @@ import cv2
 import numpy as np
 import paho.mqtt.client as mqtt
 
-from .cameras import configured_cameras
+from .cameras import configured_cameras, inventory_stream_url
 from .detector import InsightFaceDetector
+from .face_tracking import FaceTrack, FaceTrackManager, TrackCandidate, select_within_budget
+from .ip_capture import IpEngineCapture
 from .pipeline import IrisPipeline
 from .recognizer import NoFaceDetectedError, InsightFaceRecognizer, cosine_similarity, decode_image
 from .schemas import CameraConfig
@@ -135,8 +137,9 @@ class _GstUsbCapture:
 
 
 class _CameraWorkerState:
-    def __init__(self, camera: CameraConfig):
+    def __init__(self, camera: CameraConfig, tracker: FaceTrackManager):
         self.camera = camera
+        self.tracker = tracker
         self.stop_event = threading.Event()
         self.thread: threading.Thread | None = None
         self.stats_lock = threading.Lock()
@@ -147,6 +150,20 @@ class _CameraWorkerState:
             "events_written": 0,
             "occlusions_written": 0,
             "frames_read": 0,
+            "faces_detected": 0,
+            # Censo: tudo que o detector devolveu, inclusive quem esta longe
+            # demais ou torto demais para virar track.  Detectar e plano (~43 ms
+            # pedindo 3 ou 50), entao contar quem passa nao custa orcamento.
+            "faces_seen_total": 0,
+            "faces_below_track_size": 0,
+            "faces_in_last_frame": 0,
+            "faces_in_frame_peak": 0,
+            "faces_materialized": 0,
+            "materialize_deferred": 0,
+            "frames_over_budget": 0,
+            "tracks_started": 0,
+            "recognition_attempts": 0,
+            "active_tracks": 0,
             "no_face_detected": 0,
             "recognition_errors": 0,
             "last_occlusion_at": None,
@@ -191,7 +208,17 @@ class IrisRuntime:
         self.pipeline = IrisPipeline(settings, self.detector, self.store)
         self.cameras = configured_cameras(settings)
         self._camera_workers = {
-            camera.camera_id: _CameraWorkerState(camera) for camera in self.cameras
+            camera.camera_id: _CameraWorkerState(
+                camera,
+                FaceTrackManager(
+                    max_tracks=settings.pipeline_max_faces,
+                    iou_threshold=settings.pipeline_track_iou_threshold,
+                    ttl_seconds=settings.pipeline_track_ttl_seconds,
+                    min_frames=settings.pipeline_track_min_frames,
+                    retry_seconds=settings.pipeline_track_retry_seconds,
+                ),
+            )
+            for camera in self.cameras
         }
         self._recognizer_lock = threading.RLock()
         self._event_lock = threading.Lock()
@@ -206,6 +233,7 @@ class IrisRuntime:
         self._mqtt_client: mqtt.Client | None = None
         self._mqtt_debounce: dict[tuple[str, str, str], float] = {}
         self._mqtt_debounce_lock = threading.Lock()
+        self.warm_up_report: dict | None = None
 
     def start(self) -> None:
         logging.basicConfig(
@@ -214,6 +242,7 @@ class IrisRuntime:
         )
         self._start_push_worker()
         self._start_mqtt_worker()
+        self._warm_up_models()
         if self.settings.stream_worker_enabled:
             self.start_stream()
 
@@ -254,7 +283,28 @@ class IrisRuntime:
         state.stop_event.set()
         if state.thread:
             state.thread.join(timeout=5)
+        state.tracker.clear()
+        self._set_stats(state, active_tracks=0)
         self._set_stats(state, running=False)
+
+    def _warm_up_models(self) -> None:
+        """Pay the TensorRT engine build at boot instead of on the first face."""
+        if not self.settings.pipeline_warm_up_enabled:
+            self.warm_up_report = {"skipped": True}
+            return
+        started = time.monotonic()
+        try:
+            with self._recognizer_lock:
+                report = self.recognizer.warm_up()
+        except Exception as exc:
+            # Never block startup: a failed warm-up only means the first real
+            # face pays the build, which is the behaviour we had before.
+            self.warm_up_report = {"error": str(exc)}
+            self.logger.warning("model warm-up failed, first face pays the engine build: %s", exc)
+            return
+        report["total_seconds"] = round(time.monotonic() - started, 3)
+        self.warm_up_report = report
+        self.logger.info("model warm-up finished %s", report)
 
     def enroll(self, subject: str, filename: str | None, payload: bytes) -> dict:
         image = decode_image(payload)
@@ -353,6 +403,14 @@ class IrisRuntime:
             "model": self.settings.face_model_name,
             "det_size": self.settings.det_size_tuple,
             "single_face": self.settings.pipeline_single_face,
+            "max_faces": self.settings.pipeline_max_faces,
+            "detect_max_faces": self.settings.effective_detect_max_faces,
+            "materialize_budget": self.settings.effective_materialize_budget,
+            "tracking": {
+                "iou_threshold": self.settings.pipeline_track_iou_threshold,
+                "ttl_seconds": self.settings.pipeline_track_ttl_seconds,
+                "min_frames": self.settings.pipeline_track_min_frames,
+            },
             "crop_padding": self.settings.pipeline_face_crop_padding,
         }
 
@@ -369,7 +427,9 @@ class IrisRuntime:
                     "primary": camera.primary,
                     "source_kind": camera.source_kind,
                     "device": camera.device,
-                    "stream_url": camera.public_stream_url or camera.stream_url,
+                    "stream_url": inventory_stream_url(
+                        camera.source_kind, camera.public_stream_url, camera.stream_url
+                    ),
                     # Consumed internally by the Onix resolver. The browser
                     # still receives only the selected stream_url from /stream.
                     "stream_urls": camera.public_stream_urls,
@@ -546,6 +606,7 @@ class IrisRuntime:
             for item in ("CUDAExecutionProvider", "TensorrtExecutionProvider")
         ) else "cpu_only"
         report["mode"] = mode
+        report["warm_up"] = self.warm_up_report
         return report
 
     def stream_status(self, camera_id: str | None = None) -> dict:
@@ -567,6 +628,60 @@ class IrisRuntime:
         with state.preview_lock:
             stats["preview_at"] = state.latest_preview_at
         return stats
+
+    def crowd_status(self, camera_id: str | None = None) -> dict:
+        """Quantas pessoas a camera VE, separado de quantas ela RECONHECE.
+
+        Sao dois numeros com potencias diferentes e o produto precisa dos dois:
+        num evento, a maioria de quem atravessa o quadro esta longe demais ou
+        de angulo ruim para reconhecimento, mas ainda assim passou. Detectar e
+        plano (~43 ms por frame pedindo 3 ou 50 rostos), entao o censo nao
+        compete com o reconhecimento pelo orcamento.
+
+        Ressalva importante: isto conta ROSTOS DETECTADOS, nao pessoas. Quem
+        estiver de costas, de perfil fechado ou pequeno demais para o detector
+        nao entra em numero nenhum. Contagem de pessoas de verdade exigiria um
+        detector de corpo, que nao faz parte deste pipeline.
+        """
+        cameras = (
+            [camera_id] if camera_id is not None
+            else [camera.camera_id for camera in self.cameras if camera.enabled]
+        )
+        saida = []
+        for item in cameras:
+            state = self._camera_workers[item]
+            with state.stats_lock:
+                stats = dict(state.stats)
+            vistos = int(stats.get("faces_seen_total") or 0)
+            materializados = int(stats.get("faces_materialized") or 0)
+            saida.append({
+                "camera_id": item,
+                "seen": {
+                    "faces_in_last_frame": stats.get("faces_in_last_frame", 0),
+                    "faces_in_frame_peak": stats.get("faces_in_frame_peak", 0),
+                    "faces_seen_total": vistos,
+                    "faces_below_track_size": stats.get("faces_below_track_size", 0),
+                    "detect_max_faces": self.settings.effective_detect_max_faces,
+                },
+                "recognized": {
+                    "active_tracks": stats.get("active_tracks", 0),
+                    "tracks_started": stats.get("tracks_started", 0),
+                    "faces_materialized": materializados,
+                    "events_written": stats.get("events_written", 0),
+                    "max_tracks": self.settings.pipeline_max_faces,
+                },
+                "budget": {
+                    "materialize_per_frame": self.settings.effective_materialize_budget,
+                    "materialize_deferred": stats.get("materialize_deferred", 0),
+                    "frames_over_budget": stats.get("frames_over_budget", 0),
+                    "checks_per_second": self.settings.effective_checks_per_second,
+                },
+                # Fracao do que foi visto que chegou a virar reconhecimento.
+                # Cair muito significa que o censo enxerga gente que o orcamento
+                # nao alcanca: subir materialize_per_frame ou aceitar a perda.
+                "materialized_ratio": round(materializados / vistos, 4) if vistos else None,
+            })
+        return {"cameras": saida}
 
     def latest_preview_jpeg(self, camera_id: str | None = None) -> bytes | None:
         camera_id = camera_id or self.settings.camera_1_id
@@ -808,19 +923,23 @@ class IrisRuntime:
                 while not state.stop_event.is_set():
                     ok, frame = capture.read()
                     if not ok or frame is None:
+                        if camera.source_kind == "ip_engine" and getattr(capture, "transient_failure", False):
+                            continue
                         self._set_stats(state, running=False, last_error="falha ao ler frame")
                         break
 
                     self._increment_stat(state, "frames_read")
                     now = time.monotonic()
                     self._update_preview(state, frame, now)
-                    if camera.source_kind != "gst_usb_sampled" and now - last_processed < self.settings.stream_capture_interval_seconds:
+                    if camera.source_kind not in {"gst_usb_sampled", "ip_engine"} and now - last_processed < self.settings.stream_capture_interval_seconds:
                         continue
                     last_processed = now
 
                     self._process_frame(frame, camera, state)
             finally:
                 capture.release()
+                state.tracker.clear()
+                self._set_stats(state, active_tracks=0)
 
             if not state.stop_event.is_set():
                 time.sleep(self.settings.stream_reconnect_delay_seconds)
@@ -829,7 +948,7 @@ class IrisRuntime:
         self.logger.info("stream worker stopped camera=%s", camera.camera_id)
 
     def _wait_for_stream_source(self, camera: CameraConfig, state: _CameraWorkerState) -> None:
-        if camera.source_kind in {"jetson_gst_usb", "usb", "gst_usb_sampled"}:
+        if camera.source_kind in {"jetson_gst_usb", "usb", "gst_usb_sampled", "ip_engine"}:
             return
 
         parsed = urllib.parse.urlparse(camera.stream_url)
@@ -879,6 +998,12 @@ class IrisRuntime:
             time.sleep(min(1.0, self.settings.stream_reconnect_delay_seconds))
 
     def _open_capture(self, camera: CameraConfig):
+        if camera.source_kind == "ip_engine":
+            return IpEngineCapture(
+                camera.stream_url, camera.camera_id, self.settings.ip_engine_token_file,
+                interval=self.settings.stream_capture_interval_seconds,
+                max_age=self.settings.ip_engine_max_frame_age_seconds,
+            )
         if camera.source_kind in {"jetson_gst_usb", "usb"}:
             capture = cv2.VideoCapture(camera.device, cv2.CAP_V4L2)
             if self.settings.usb_camera_input_format.strip().lower() in {"mjpeg", "mjpg"}:
@@ -1208,108 +1333,51 @@ class IrisRuntime:
 
         try:
             with self._recognizer_lock:
-                detection, quality, recognition = self.pipeline.analyze_frame(frame)
-            face_score = float(detection.metadata.get("det_score") or 0.0)
-            current_landmarks = int(detection.metadata.get("landmarks_detected") or 0)
-            visual_occlusion = (recognition.get("face") or {}).get("visual_occlusion") or {}
-            event_id = f"{camera.camera_id}_{captured_at.replace(':', '').replace('+', 'Z')}_{capture_number:08d}"
-            quality_reason = quality.get("reason")
-            visual_occlusion_attempt = bool(
-                visual_occlusion.get("suspected") and quality_reason in {None, "det_score_baixo"}
-            )
-
-            if quality_reason == "face_ocluida" or visual_occlusion_attempt:
-                sudden = state.last_landmarks >= 80 and current_landmarks < 40
-                image_path = self._save_capture(event_id, frame)
-                face_path = None
-                if self.settings.pipeline_save_face_crop:
-                    face_path = self._save_face_crop(event_id, detection.crop)
-                occlusion_reason = quality_reason or "suspected_visual_occlusion"
-                occlusion_event = {
-                    "event_id": event_id,
-                    "capture_id": event_id,
-                    "capture_number": capture_number,
-                    "event_type": "occlusion",
-                    "occlusion_reason": occlusion_reason,
-                    "occlusion_class": self._classify_occlusion(recognition),
-                    "camera": camera.camera_id,
-                    "captured_at": captured_at,
-                    "camera_id": camera.camera_id,
-                    "image_path": str(image_path),
-                    "image_url": f"/captures/{event_id}/image",
-                    "frame_image_url": f"/occlusions/{event_id}/frame.jpg",
-                    "face_image_path": str(face_path) if face_path else None,
-                    "face_image_url": f"/occlusions/{event_id}/face.jpg" if face_path else None,
-                    "detector": {
-                        **self.detector_status(),
-                        "score": detection.det_score,
-                        "bbox": detection.bbox,
-                    },
-                    "quality": quality,
-                    "recognition": recognition,
-                    "occlusion": {
-                        "landmarks_detected": current_landmarks,
-                        "total_landmarks": detection.metadata.get("total_landmarks", 0),
-                        "occlusion_ratio": detection.metadata.get("occlusion_ratio", 1.0),
-                        "det_score": detection.det_score,
-                        "bbox": detection.bbox,
-                        "sudden": sudden,
-                        "previous_landmarks": state.last_landmarks,
-                        "visual": visual_occlusion,
-                    },
-                }
-                self._write_occlusion(occlusion_event)
-                self._enqueue_onix_push("occlusion", occlusion_event)
-                self._enqueue_mqtt_publish("occlusion", occlusion_event)
-                self._increment_stat(state, "occlusions_written")
-                self._set_stats(state, last_error=occlusion_reason, last_occlusion_at=captured_at, last_event_at=captured_at)
-                state.last_landmarks = 0
+                candidates = self.pipeline.detect_candidates(
+                    frame, max_faces=self.settings.effective_detect_max_faces
+                )
+            self._observe_census(state, len(candidates))
+            if not candidates:
+                state.tracker.expire(time.monotonic())
+                self._increment_stat(state, "no_face_detected")
+                self._set_stats(state, active_tracks=state.tracker.active_count, last_no_face_at=captured_at, last_error=None)
                 return
 
-            if face_score < self.settings.stream_min_face_score or not quality.get("accepted"):
-                state.last_landmarks = 0
+            track_candidates = []
+            for candidate in candidates:
+                left, top, right, bottom = candidate["bbox"]
+                if min(right - left, bottom - top) < self.settings.pipeline_track_min_face_size:
+                    # Visto e contado, mas pequeno demais para reconhecer: e a
+                    # pessoa distante que atravessa o quadro sem angulo util.
+                    self._increment_stat(state, "faces_below_track_size")
+                    continue
+                track_candidates.append(TrackCandidate(
+                    bbox=list(candidate["bbox"]),
+                    rank=self.pipeline.candidate_rank(candidate),
+                    payload=candidate,
+                    frame=frame,
+                    captured_at=captured_at,
+                    capture_number=capture_number,
+                ))
+            if not track_candidates:
+                state.tracker.expire(time.monotonic())
+                self._set_stats(state, active_tracks=state.tracker.active_count, last_error=None)
                 return
 
-            state.last_landmarks = current_landmarks
-            image_path = self._save_capture(event_id, frame)
-            face_path = None
-            if self.settings.pipeline_save_face_crop:
-                face_path = self._save_face_crop(event_id, detection.crop)
-            if capture_number % 100 == 0:
-                self._prune_captures()
-            event = {
-                "event_id": event_id,
-                "capture_id": event_id,
-                "capture_number": capture_number,
-                "camera": camera.camera_id,
-                "camera_id": camera.camera_id,
-                "captured_at": captured_at,
-                "image_path": str(image_path),
-                "image_url": f"/captures/{event_id}/image",
-                "frame_image_url": f"/events/{event_id}/frame.jpg",
-                "face_image_path": str(face_path) if face_path else None,
-                "face_image_url": f"/events/{event_id}/face.jpg" if face_path else None,
-                "detector": {
-                    **self.detector_status(),
-                    "score": detection.det_score,
-                    "bbox": detection.bbox,
-                },
-                "quality": quality,
-                "recognition": recognition,
-            }
-            self._write_event(event)
-            self._enqueue_onix_push("event", event)
-            self._enqueue_mqtt_publish("event", event)
-            state.latest_event = event
-            self._increment_stat(state, "events_written")
-            self._set_stats(state, last_event_at=captured_at, last_error=None)
-            self.logger.info(
-                "event=%s status=%s subject=%s similarity=%s",
-                event_id,
-                recognition.get("status"),
-                recognition.get("subject"),
-                recognition.get("similarity"),
-            )
+            for _ in track_candidates:
+                self._increment_stat(state, "faces_detected")
+            ready_tracks = state.tracker.update(track_candidates, time.monotonic())
+            started = state.tracker.last_created_count
+            if started:
+                for _ in range(started):
+                    self._increment_stat(state, "tracks_started")
+            self._set_stats(state, active_tracks=state.tracker.active_count, last_error=None)
+
+            for track in self._within_budget(ready_tracks, state):
+                self._increment_stat(state, "recognition_attempts")
+                self._increment_stat(state, "faces_materialized")
+                completed = self._process_track(track, camera, state)
+                state.tracker.mark_attempt(track.track_id, time.monotonic(), completed=completed)
         except NoFaceDetectedError:
             self._increment_stat(state, "no_face_detected")
             self._set_stats(state, last_no_face_at=captured_at, last_error=None)
@@ -1320,6 +1388,149 @@ class IrisRuntime:
             self._increment_stat(state, "recognition_errors")
             self._set_stats(state, last_error=str(exc))
             self.logger.exception("failed to process stream frame camera=%s: %s", camera.camera_id, exc)
+
+    def _observe_census(self, state: _CameraWorkerState, detected: int) -> None:
+        """Registra quantos rostos o detector viu neste frame, materializados ou nao."""
+        with state.stats_lock:
+            state.stats["faces_seen_total"] += detected
+            state.stats["faces_in_last_frame"] = detected
+            if detected > state.stats["faces_in_frame_peak"]:
+                state.stats["faces_in_frame_peak"] = detected
+
+    def _within_budget(self, ready_tracks: list[FaceTrack], state: _CameraWorkerState) -> list[FaceTrack]:
+        """Materializa ate `pipeline_materialize_budget` tracks neste frame.
+
+        Landmarks e embedding custam ~21 ms por rosto e sao o unico item do
+        pipeline que escala com a quantidade de gente; a deteccao e plana.  Sem
+        teto, um frame com muitos tracks prontos estoura o orcamento de frame e
+        a perda vira nao deterministica.  Com teto, o excedente simplesmente nao
+        recebe `mark_attempt` e continua pronto no frame seguinte: como o track
+        vive `ttl_seconds`, ele tem varias chances antes de expirar.
+
+        Ordem: quem nunca foi tentado primeiro, depois o de maior `rank` (rosto
+        maior, mais nitido e com score melhor).  Isso evita que um track novo
+        fique preso atras de retentativas.
+        """
+        selecionados, adiados = select_within_budget(
+            ready_tracks, self.settings.effective_materialize_budget
+        )
+        if adiados:
+            with state.stats_lock:
+                state.stats["materialize_deferred"] += adiados
+                state.stats["frames_over_budget"] += 1
+        return selecionados
+
+    def _process_track(self, track: FaceTrack, camera: CameraConfig, state: _CameraWorkerState) -> bool:
+        """Analyze the best retained candidate once; return whether the track is final."""
+        # Identity of the evidence frame, not of the frame that closed the
+        # track: the two are up to ttl_seconds apart and the JPEG that reaches
+        # ViewCare must match the timestamp reported with it.
+        captured_at = track.best.captured_at
+        capture_number = track.best.capture_number
+        with self._recognizer_lock:
+            detection, quality, recognition = self.pipeline.analyze_candidate(track.best.frame, track.best.payload)
+        face_score = float(detection.metadata.get("det_score") or 0.0)
+        current_landmarks = int(detection.metadata.get("landmarks_detected") or 0)
+        visual_occlusion = (recognition.get("face") or {}).get("visual_occlusion") or {}
+        event_id = (
+            f"{camera.camera_id}_{captured_at.replace(':', '').replace('+', 'Z')}_"
+            f"{capture_number:08d}_t{track.track_id:03d}"
+        )
+        quality_reason = quality.get("reason")
+        visual_occlusion_attempt = bool(
+            visual_occlusion.get("suspected") and quality_reason in {None, "det_score_baixo"}
+        )
+        track_info = {
+            "id": track.track_id,
+            "frames_seen": track.frames_seen,
+            "best_rank": round(track.best.rank, 4),
+            "first_seen_monotonic": round(track.first_seen, 4),
+        }
+
+        if quality_reason == "face_ocluida" or visual_occlusion_attempt:
+            sudden = track.last_landmarks >= 80 and current_landmarks < 40
+            image_path = self._save_capture(event_id, track.best.frame)
+            face_path = self._save_face_crop(event_id, detection.crop) if self.settings.pipeline_save_face_crop else None
+            occlusion_reason = quality_reason or "suspected_visual_occlusion"
+            occlusion_event = {
+                "event_id": event_id,
+                "capture_id": event_id,
+                "capture_number": capture_number,
+                "event_type": "occlusion",
+                "occlusion_reason": occlusion_reason,
+                "occlusion_class": self._classify_occlusion(recognition),
+                "camera": camera.camera_id,
+                "captured_at": captured_at,
+                "camera_id": camera.camera_id,
+                "track": track_info,
+                "image_path": str(image_path),
+                "image_url": f"/captures/{event_id}/image",
+                "frame_image_url": f"/occlusions/{event_id}/frame.jpg",
+                "face_image_path": str(face_path) if face_path else None,
+                "face_image_url": f"/occlusions/{event_id}/face.jpg" if face_path else None,
+                "detector": {**self.detector_status(), "score": detection.det_score, "bbox": detection.bbox},
+                "quality": quality,
+                "recognition": recognition,
+                "occlusion": {
+                    "landmarks_detected": current_landmarks,
+                    "total_landmarks": detection.metadata.get("total_landmarks", 0),
+                    "occlusion_ratio": detection.metadata.get("occlusion_ratio", 1.0),
+                    "det_score": detection.det_score,
+                    "bbox": detection.bbox,
+                    "sudden": sudden,
+                    "previous_landmarks": track.last_landmarks,
+                    "visual": visual_occlusion,
+                },
+            }
+            self._write_occlusion(occlusion_event)
+            self._enqueue_onix_push("occlusion", occlusion_event)
+            self._enqueue_mqtt_publish("occlusion", occlusion_event)
+            self._increment_stat(state, "occlusions_written")
+            self._set_stats(state, last_error=occlusion_reason, last_occlusion_at=captured_at, last_event_at=captured_at)
+            track.last_landmarks = 0
+            return True
+
+        if face_score < self.settings.stream_min_face_score or not quality.get("accepted"):
+            track.last_landmarks = 0
+            return False
+
+        track.last_landmarks = current_landmarks
+        image_path = self._save_capture(event_id, track.best.frame)
+        face_path = self._save_face_crop(event_id, detection.crop) if self.settings.pipeline_save_face_crop else None
+        if capture_number % 100 == 0:
+            self._prune_captures()
+        event = {
+            "event_id": event_id,
+            "capture_id": event_id,
+            "capture_number": capture_number,
+            "camera": camera.camera_id,
+            "camera_id": camera.camera_id,
+            "captured_at": captured_at,
+            "track": track_info,
+            "image_path": str(image_path),
+            "image_url": f"/captures/{event_id}/image",
+            "frame_image_url": f"/events/{event_id}/frame.jpg",
+            "face_image_path": str(face_path) if face_path else None,
+            "face_image_url": f"/events/{event_id}/face.jpg" if face_path else None,
+            "detector": {**self.detector_status(), "score": detection.det_score, "bbox": detection.bbox},
+            "quality": quality,
+            "recognition": recognition,
+        }
+        self._write_event(event)
+        self._enqueue_onix_push("event", event)
+        self._enqueue_mqtt_publish("event", event)
+        state.latest_event = event
+        self._increment_stat(state, "events_written")
+        self._set_stats(state, last_event_at=captured_at, last_error=None)
+        self.logger.info(
+            "event=%s track=%s status=%s subject=%s similarity=%s",
+            event_id,
+            track.track_id,
+            recognition.get("status"),
+            recognition.get("subject"),
+            recognition.get("similarity"),
+        )
+        return True
 
     def _prune_captures(self) -> None:
         with self._retention_lock:

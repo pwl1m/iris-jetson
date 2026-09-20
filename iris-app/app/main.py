@@ -1,8 +1,8 @@
 from contextlib import asynccontextmanager
 import time
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 
 from .settings import settings
 from .iris_runtime import IrisRuntime
@@ -715,6 +715,16 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Iris App", version="0.2.0", lifespan=lifespan)
 
 
+@app.middleware("http")
+async def restrict_api_clients(request: Request, call_next):
+    """Restrict the LAN management API when the deploy provides an allow-list."""
+    allowed = settings.api_allowed_clients
+    client_ip = request.client.host if request.client else None
+    if allowed and client_ip not in allowed:
+        return JSONResponse(status_code=403, content={"detail": "cliente nao autorizado"})
+    return await call_next(request)
+
+
 @app.get("/", response_class=HTMLResponse, include_in_schema=False)
 def docs_page() -> HTMLResponse:
     return HTMLResponse(content=_DASHBOARD_HTML)
@@ -877,6 +887,17 @@ def sample_image(sample_id: int):
 @app.delete("/samples/{sample_id}")
 def delete_sample(sample_id: int) -> dict:
     return runtime.delete_sample(sample_id)
+
+
+@app.get("/crowd")
+def crowd(camera_id: str | None = None) -> dict:
+    """Censo do que a camera ve, separado do que ela reconhece.
+
+    `seen` conta rostos detectados, inclusive os pequenos ou tortos demais para
+    reconhecer. `recognized` conta o que passou pelo pipeline completo. Nao e
+    contagem de pessoas: quem estiver de costas nao e detectado.
+    """
+    return runtime.crowd_status(camera_id)
 
 
 @app.get("/stream/status")

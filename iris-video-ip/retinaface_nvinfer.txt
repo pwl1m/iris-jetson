@@ -1,0 +1,25 @@
+# Experimental DeepStream detector smoke-test configuration.
+# Not used by docker-compose.ip-camera.yml yet.
+[property]
+gpu-id=0
+onnx-file=/tmp/det_2.5g.onnx
+model-engine-file=/tmp/det_2.5g.onnx_b1_gpu0_fp16.engine
+batch-size=1
+network-type=0
+process-mode=1
+network-mode=2
+infer-dims=3;480;480
+model-color-format=0
+net-scale-factor=0.0078125
+offsets=127.5;127.5;127.5
+maintain-aspect-ratio=1
+symmetric-padding=0
+num-detected-classes=1
+cluster-mode=4
+interval=0
+gie-unique-id=1
+parse-bbox-func-name=NvDsInferParseRetinaFace
+custom-lib-path=/tmp/libiris_retinaface_parser.so
+
+[class-attrs-all]
+pre-cluster-threshold=0.5

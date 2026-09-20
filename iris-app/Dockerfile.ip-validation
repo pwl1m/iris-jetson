@@ -1,0 +1,8 @@
+# Local validation only: reuse the installed dependencies, replace application code.
+# The base image ID must be recorded in the trial report. Production continues
+# to use Dockerfile.jetson with independently verified dependencies.
+ARG VALIDATION_BASE=iris-jetson-iris-app:latest
+FROM ${VALIDATION_BASE}
+WORKDIR /app
+COPY app ./app
+CMD ["python3", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]

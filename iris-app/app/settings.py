@@ -24,6 +24,8 @@ class Settings(BaseSettings):
     stream_url: str = "rtsp://iris-go2rtc:8554/usb_camera"
     stream_gst_pipeline: str = ""
     stream_worker_enabled: bool = True
+    ip_engine_token_file: str = "/run/secrets/engine_token"
+    ip_engine_max_frame_age_seconds: float = 2.0
     stream_capture_interval_seconds: float = 1.0
     stream_reconnect_delay_seconds: float = 3.0
     stream_jpeg_quality: int = 90
@@ -38,7 +40,34 @@ class Settings(BaseSettings):
     stream_source_ready_timeout_seconds: float = 20.0
     stream_source_probe_url: str = "http://iris-go2rtc:1984/api/streams"
     pipeline_checks_per_second: float = 1.0
-    pipeline_single_face: bool = True
+    pipeline_single_face: bool = False
+    # Tres orcamentos distintos, porque detectar, rastrear e materializar custam
+    # coisas diferentes.  Medido nesta Jetson com det_size 960: detectar custa
+    # ~43 ms por frame, plano, pedindo 3 ou 50 rostos -- o SCRFD ja varre o frame
+    # inteiro e max_faces so corta a lista depois.  Materializar (landmarks +
+    # embedding) custa ~21 ms por rosto e e o unico que escala.
+    #
+    # pipeline_detect_max_faces: censo do frame.  Barato, serve para contar quem
+    #   passa mesmo sem ter angulo ou tamanho para reconhecer.
+    # pipeline_max_faces: quantos tracks simultaneos o tracker mantem.  Custa
+    #   memoria e casamento IoU, nao GPU.
+    # pipeline_materialize_budget: quantos tracks viram landmarks+embedding POR
+    #   FRAME.  Este e o que consome o orcamento: a 5 FPS sao 200 ms por frame,
+    #   43 ms vao para deteccao e sobram ~150 ms, ou seja 5 rostos com folga
+    #   (p95 medido de 167,8 ms) e 6 nao (221,6 ms).
+    #
+    # Como os tracks vivem ttl_seconds (1,25 s = ~6 frames a 5 FPS), um orcamento
+    # de 5 por frame materializa ate ~30 tracks dentro de uma janela de TTL sem
+    # estourar frame algum.
+    pipeline_detect_max_faces: int = 20
+    pipeline_max_faces: int = 5
+    pipeline_materialize_budget: int = 5
+    pipeline_track_iou_threshold: float = 0.25
+    pipeline_track_ttl_seconds: float = 1.25
+    pipeline_track_min_frames: int = 2
+    pipeline_track_retry_seconds: float = 0.75
+    pipeline_track_min_face_size: int = 32
+    pipeline_warm_up_enabled: bool = True
     pipeline_save_face_crop: bool = True
     pipeline_face_crop_padding: float = 0.25
     face_min_det_score: float = 0.65
@@ -47,8 +76,17 @@ class Settings(BaseSettings):
     face_min_blur_score: float = 40.0
     visual_occlusion_enabled: bool = True
     visual_occlusion_score_threshold: float = 0.75
-    visual_occlusion_min_width: int = 96
-    visual_occlusion_min_height: int = 96
+    # Piso de AVALIACAO: abaixo disto nem as metricas sao calculadas. Alinhado
+    # com face_min_width/height, porque um rosto grande o bastante para decidir
+    # identidade e grande o bastante para ser medido. Com 96 a heuristica nao
+    # rodava em 99,4% dos rostos reais da linha USB.
+    visual_occlusion_min_width: int = 48
+    visual_occlusion_min_height: int = 48
+    # Piso de VEREDITO: abaixo disto as metricas sao registradas mas `suspected`
+    # nunca fica True. Em rostos de 48-96px a regra atual marcaria 4,84% dos
+    # rostos normais como oclusao, medido em 9156 crops reais. Mantido em 96 ate
+    # o ensaio com mascara e oculos dar rotulo para recalibrar os limiares.
+    visual_occlusion_verdict_min_size: int = 96
     visual_occlusion_dark_pixel_threshold: int = 55
     visual_occlusion_dark_lower_ratio: float = 0.45
     visual_occlusion_dark_top_ratio: float = 0.60
@@ -123,6 +161,27 @@ class Settings(BaseSettings):
     mqtt_publish_queue_size: int = 500
     mqtt_publish_keepalive_seconds: int = 30
     mqtt_debounce_seconds: float = 30.0
+    api_allowed_client_ips: str = ""
+
+    @property
+    def effective_detect_max_faces(self) -> int:
+        """O censo nunca pode ser menor que a capacidade do tracker."""
+        return max(int(self.pipeline_detect_max_faces), int(self.pipeline_max_faces))
+
+    @property
+    def effective_materialize_budget(self) -> int:
+        """Teto de rostos materializados por frame, limitado pela capacidade do tracker.
+
+        Materializar mais do que o tracker consegue manter simultaneamente nao
+        tem efeito, entao o orcamento e limitado a `pipeline_max_faces`.  O
+        default de codigo ja e coerente (5 e 5); o clamp existe para que baixar
+        so a capacidade do tracker nao deixe um orcamento pendurado maior que
+        ela.  Zero ou negativo desliga o teto.
+        """
+        budget = int(self.pipeline_materialize_budget)
+        if budget <= 0:
+            return 0
+        return min(budget, int(self.pipeline_max_faces))
 
     @property
     def det_size_tuple(self) -> tuple[int, int]:
@@ -141,6 +200,10 @@ class Settings(BaseSettings):
     def effective_checks_per_second(self) -> float:
         interval = float(self.stream_capture_interval_seconds)
         return round(1.0 / interval, 3) if interval > 0 else 0.0
+
+    @property
+    def api_allowed_clients(self) -> set[str]:
+        return {item.strip() for item in self.api_allowed_client_ips.split(",") if item.strip()}
 
 
 settings = Settings()

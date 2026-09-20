@@ -1,0 +1,177 @@
+# Linha IP: arquivo independente; não combinar com docker-compose.yml USB.
+services:
+  iris-app:
+    build:
+      context: ./iris-app
+      dockerfile: Dockerfile.jetson
+    image: iris-app:ip-dev
+    restart: unless-stopped
+    runtime: nvidia
+    environment:
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      LD_LIBRARY_PATH: /opt/jetson-libs/cuda:/opt/jetson-libs/system
+      STREAM_WORKER_ENABLED: "true"
+      STREAM_SOURCE_KIND: ip_engine
+      STREAM_URL: http://iris-video-ip:8090/v1/frame
+      STREAM_SOURCE_PROBE_URL: ""
+      CAMERA_1_ID: ${IRIS_IP_CAMERA_ID:-entrada}
+      CAMERA_1_SOURCE_KIND: ip_engine
+      CAMERA_1_STREAM_URL: http://iris-video-ip:8090/v1/frame
+      # Browser-facing URL only; never publish the private frame contract above.
+      CAMERA_1_LAN_STREAM_URL: "${IRIS_IP_LAN_STREAM_URL:-}"
+      CAMERA_1_TAILSCALE_STREAM_URL: "${IRIS_IP_TAILSCALE_STREAM_URL:-}"
+      CAMERA_1_DEVICE: ""
+      CAMERA_2_ENABLED: "false"
+      CAMERA_3_ENABLED: "false"
+      CAMERA_4_ENABLED: "false"
+      # Deliberately TWICE the engine cadence.  /v1/frame serves only the latest
+      # frame and rejects repeats, so polling at the production rate lands on the
+      # already consumed frame: measured 4.12 of 5.0 FPS, 17.7% lost.  At 0.1
+      # against a 5 FPS engine: 5.000 of 5.0, 0.00% lost over 120 s.
+      STREAM_CAPTURE_INTERVAL_SECONDS: "${IRIS_IP_CAPTURE_INTERVAL_SECONDS:-0.1}"
+      # Three separate budgets, because detecting, tracking and materialising
+      # cost different things.  Measured here at det_size 960: detection is flat
+      # at ~43 ms/frame whether you ask for 3 faces or 50, while landmarks plus
+      # embedding cost ~21 ms per face and are the only part that scales.
+      #
+      # Per-frame p95 with det_size 960 at 5 FPS (200 ms budget): 3 faces
+      # 146.6 ms, 4 faces 150.4 ms, 5 faces 167.8 ms, 6 faces 221.6 ms.  So five
+      # is the largest budget that fits; six needs det_size 640, which costs
+      # 5.7% face discard instead of 2.3%.
+      #
+      # Tracks live ttl_seconds (1.25 s ~ 6 frames at 5 FPS), so a budget of 5
+      # per frame still materialises up to ~30 tracks inside one TTL window.
+      PIPELINE_DETECT_MAX_FACES: "${IRIS_IP_DETECT_MAX_FACES:-20}"
+      PIPELINE_MAX_FACES: "${IRIS_IP_MAX_FACES:-12}"
+      PIPELINE_MATERIALIZE_BUDGET: "${IRIS_IP_MATERIALIZE_BUDGET:-5}"
+      # A 480x480 detector input downscales a 1920x1080 frame by 4x, so a 48 px
+      # face reaches SCRFD as 12 px.  Measured on 120 real frames (~210 faces),
+      # the share of faces discarded below face_min_det_score is 11.1% at 480,
+      # 5.7% at 640 and 2.3% at 960, and the spurious det_score_near_min
+      # occlusion signal falls from 58.7% to 27.8% to 21.0%.  That discard is a
+      # hard ceiling on the identification rate, so 960 is the quality choice.
+      # 1280 regresses: det_score falls back to 0.735 at 73.8 ms/frame.
+      #
+      # The cost only fits at 5 FPS.  Full pipeline with 3 faces in frame,
+      # measured on this Jetson: p50 109.0 ms and p95 124.5 ms per frame at 960
+      # (88.4/97.9 at 480).  Against a 100 ms budget at 10 FPS that overruns and
+      # frames are dropped non-deterministically; against the 200 ms budget at
+      # 5 FPS it fits with 38% of margin.  See docs/DECISIONS.md and
+      # IRIS_IP_OUTPUT_FPS, which must stay paired with this value.
+      #
+      # Changing this input shape forces a fresh TensorRT engine build on the
+      # next boot; warm_up() pays it before the worker starts.
+      FACE_DET_SIZE: "${IRIS_IP_FACE_DET_SIZE:-960,960}"
+      IP_ENGINE_TOKEN_FILE: /run/secrets/engine_token
+      # Default fecha em loopback de proposito: a lista real da LAN (gateway do
+      # Docker, host do Onix, IP do Jetson) vive no .env, que nao vai para o Git.
+      # Sem isso o repositorio carregaria o enderecamento interno do cliente.
+      API_ALLOWED_CLIENT_IPS: "${IRIS_IP_API_ALLOWED_CLIENT_IPS:-127.0.0.1}"
+      # This service has no env_file on purpose: the IP line stays independent
+      # from the frozen USB deploy.  Anything the Iris contract needs must be
+      # declared here, or the container silently runs on code defaults.
+      # The engine already serves the browser preview; the in-app JPEG re-encode
+      # would only burn CPU on the same frames.
+      STREAM_PREVIEW_ENABLED: "false"
+      STREAM_MAX_CAPTURE_FILES: "${IRIS_IP_MAX_CAPTURE_FILES:-100000}"
+      # 14 days, set by the operation on 2026-09-19; also the purge deadline the
+      # recurrence phase must honour for biometrics of people never enrolled.
+      STREAM_CAPTURE_RETENTION_HOURS: "${IRIS_IP_CAPTURE_RETENTION_HOURS:-336.0}"
+      # Defaults are off so a fresh clone publishes nowhere; the deploy opts in.
+      MQTT_PUBLISH_ENABLED: "${IRIS_IP_MQTT_PUBLISH_ENABLED:-false}"
+      MQTT_PUBLISH_HOST: "${IRIS_IP_MQTT_PUBLISH_HOST:-}"
+      MQTT_PUBLISH_PORT: "${IRIS_IP_MQTT_PUBLISH_PORT:-1883}"
+      MQTT_PUBLISH_CLIENT_ID: "${IRIS_IP_MQTT_PUBLISH_CLIENT_ID:-}"
+      MQTT_PUBLISH_TOPIC_PREFIX: "${IRIS_IP_MQTT_PUBLISH_TOPIC_PREFIX:-iris}"
+      MQTT_PUBLISH_QOS: "${IRIS_IP_MQTT_PUBLISH_QOS:-1}"
+      MQTT_PUBLISH_QUEUE_SIZE: "${IRIS_IP_MQTT_PUBLISH_QUEUE_SIZE:-500}"
+      MQTT_PUBLISH_KEEPALIVE_SECONDS: "${IRIS_IP_MQTT_PUBLISH_KEEPALIVE_SECONDS:-30}"
+    ports:
+      - "${IRIS_IP_API_BIND:-127.0.0.1}:${IRIS_IP_API_PORT:-8181}:8080"
+    secrets: [engine_token]
+    healthcheck:
+      # /health always answers 200; the worker verdict is in the body.  Loopback
+      # is inside API_ALLOWED_CLIENT_IPS, so the probe is never rejected.
+      test: [CMD, python3, -c, "import json,urllib.request;raise SystemExit(0 if json.load(urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=5))['status'] == 'ok' else 1)"]
+      interval: 15s
+      timeout: 8s
+      retries: 3
+      # A cold TensorRT build measured 258s on this Jetson; leave margin so a
+      # first boot is never reported unhealthy while warm_up() is still running.
+      start_period: 420s
+    volumes:
+      - iris-ip-faces:/data/faces
+      - iris-ip-events:/data/events
+      - iris-ip-engines:/data/trt-engines
+      - ./iris-app/models:/models/face:ro
+      - /usr/local/cuda/targets/aarch64-linux/lib:/opt/jetson-libs/cuda:ro
+      - ./runtime-libs:/opt/jetson-libs/system:ro
+    networks: [iris-ip]
+
+    depends_on:
+      iris-video-ip:
+        condition: service_healthy
+
+  iris-video-ip:
+    build:
+      context: ./iris-video-ip
+      args:
+        BASE_IMAGE: ${IRIS_IP_BASE_IMAGE:-nvcr.io/nvidia/deepstream:7.1-samples-multiarch}
+    image: iris-video-ip:dev
+    runtime: nvidia
+    restart: unless-stopped
+    init: true
+    environment:
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility,video
+      # NVIDIA workaround for DS 7.1 with JetPack 6.2 / L4T 36.5.
+      AARCH64_IGPU: "1"
+      IRIS_IP_RTSP_FILE: /run/secrets/camera_rtsp
+      IRIS_IP_TOKEN_FILE: /run/secrets/engine_token
+      IRIS_IP_CAMERA_ID: ${IRIS_IP_CAMERA_ID:-entrada}
+      IRIS_IP_FRAME_FORMAT: ${IRIS_IP_FRAME_FORMAT:-NV12}
+      # 5 FPS, paired with FACE_DET_SIZE=960 on the app side: with 3 faces in
+      # frame the full pipeline measures p95 124.5 ms, which overruns the 100 ms
+      # budget of 10 FPS but fits the 200 ms of 5 FPS with 38% of margin.  A face
+      # is still seen ~22 times while someone crosses the frame at 1.4 m/s,
+      # against pipeline_track_min_frames=2.  Override only for a benchmark.
+      IRIS_IP_OUTPUT_FPS: ${IRIS_IP_OUTPUT_FPS:-5}
+      IRIS_IP_PREVIEW_FPS: ${IRIS_IP_PREVIEW_FPS:-5}
+      IRIS_IP_PREVIEW_JPEG_QUALITY: ${IRIS_IP_PREVIEW_JPEG_QUALITY:-85}
+    ports:
+      - "${IRIS_IP_ENGINE_PREVIEW_BIND:-127.0.0.1}:${IRIS_IP_ENGINE_PREVIEW_PORT:-1986}:8090"
+    networks: [iris-ip]
+    secrets: [camera_rtsp, engine_token]
+    healthcheck:
+      test: [CMD, python3, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/health', timeout=2).close()"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 30s
+
+  go2rtc:
+    profiles: [preview]
+    image: alexxit/go2rtc:1.9.14
+    restart: unless-stopped
+    command: [go2rtc, -config, /run/secrets/go2rtc_config]
+    secrets: [go2rtc_config]
+    networks: [iris-ip]
+    ports:
+      - "${IRIS_IP_PREVIEW_BIND:-127.0.0.1}:${IRIS_IP_PREVIEW_PORT:-1985}:1984"
+
+networks:
+  iris-ip: {}
+
+volumes:
+  iris-ip-faces:
+  iris-ip-events:
+  iris-ip-engines:
+
+secrets:
+  camera_rtsp:
+    file: ${IRIS_IP_RTSP_SECRET_FILE:-/etc/iris-ip/camera_rtsp}
+  engine_token:
+    file: ${IRIS_IP_TOKEN_SECRET_FILE:-/etc/iris-ip/engine_token}
+  go2rtc_config:
+    file: ${IRIS_IP_GO2RTC_SECRET_FILE:-/etc/iris-ip/go2rtc.yaml}

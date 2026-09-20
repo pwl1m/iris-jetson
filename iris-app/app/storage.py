@@ -1,5 +1,6 @@
 import json
 import sqlite3
+import threading
 from collections.abc import Callable, Iterable
 from pathlib import Path
 
@@ -32,7 +33,54 @@ class FaceStore:
     def __init__(self, db_path: str):
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        # A matriz de embeddings e reconstruida so quando a base muda.  Sem isso
+        # cada rosto de cada frame fazia SELECT da tabela inteira e json.loads de
+        # cada embedding: medido nesta Jetson, 133,7 ms para 1.000 embeddings e
+        # 2.838 ms para 20.000, contra 1,3 e 16,5 ms do produto escalar em si.
+        # Com 3 rostos a 10 FPS isso estourava o orcamento de frame ja em 1.000
+        # rostos cadastrados, que e a ordem de grandeza da fase de recorrencia.
+        self._cache_lock = threading.Lock()
+        self._generation = 0
+        self._cached_generation = -1
+        self._cached_matrix: tuple[list[str], np.ndarray, np.ndarray, list[str | None]] | None = None
         self._init_db()
+
+    def _invalidate(self) -> None:
+        with self._cache_lock:
+            self._generation += 1
+
+    def embedding_matrix(self) -> tuple[list[str], np.ndarray, np.ndarray, list[str | None]]:
+        """Subjects, matriz N x D, normas pre-calculadas e origens.
+
+        Devolve sempre a mesma tupla enquanto a base nao muda.  Os arrays sao
+        tratados como imutaveis pelos chamadores; nenhum deles escreve neles.
+        """
+        with self._cache_lock:
+            generation = self._generation
+            if self._cached_generation == generation and self._cached_matrix is not None:
+                return self._cached_matrix
+
+        subjects: list[str] = []
+        vectors: list[np.ndarray] = []
+        sources: list[str | None] = []
+        for subject, embedding, source in self.embeddings():
+            subjects.append(subject)
+            vectors.append(embedding)
+            sources.append(source)
+        if vectors:
+            matrix = np.stack(vectors, axis=0).astype(np.float32, copy=False)
+            norms = np.linalg.norm(matrix, axis=1)
+        else:
+            matrix = np.zeros((0, 0), dtype=np.float32)
+            norms = np.zeros((0,), dtype=np.float32)
+        built = (subjects, matrix, norms, sources)
+
+        with self._cache_lock:
+            # Uma escrita concorrente durante a leitura invalida este resultado;
+            # publica-se mesmo assim e a proxima chamada reconstroi.
+            self._cached_matrix = built
+            self._cached_generation = generation
+        return built
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path, check_same_thread=False)
@@ -61,7 +109,9 @@ class FaceStore:
                 "INSERT INTO face_embeddings(subject, embedding, source) VALUES (?, ?, ?)",
                 (subject, payload, source),
             )
-            return int(cursor.lastrowid)
+            sample_id = int(cursor.lastrowid)
+        self._invalidate()
+        return sample_id
 
     def list_subjects(self) -> list[dict]:
         with self._connect() as conn:
@@ -78,7 +128,9 @@ class FaceStore:
     def delete_subject(self, subject: str) -> int:
         with self._connect() as conn:
             cursor = conn.execute("DELETE FROM face_embeddings WHERE subject = ?", (subject,))
-            return int(cursor.rowcount)
+            removed = int(cursor.rowcount)
+        self._invalidate()
+        return removed
 
     def rename_subject(self, subject: str, new_subject: str) -> int:
         with self._connect() as conn:
@@ -86,7 +138,9 @@ class FaceStore:
                 "UPDATE face_embeddings SET subject = ? WHERE subject = ?",
                 (new_subject, subject),
             )
-            return int(cursor.rowcount)
+            renamed = int(cursor.rowcount)
+        self._invalidate()
+        return renamed
 
     def samples(self, subject: str) -> list[dict]:
         with self._connect() as conn:
@@ -117,7 +171,9 @@ class FaceStore:
     def delete_sample(self, sample_id: int) -> int:
         with self._connect() as conn:
             cursor = conn.execute("DELETE FROM face_embeddings WHERE id = ?", (sample_id,))
-            return int(cursor.rowcount)
+            removed = int(cursor.rowcount)
+        self._invalidate()
+        return removed
 
     def embeddings(self) -> Iterable[tuple[str, np.ndarray, str | None]]:
         with self._connect() as conn:
