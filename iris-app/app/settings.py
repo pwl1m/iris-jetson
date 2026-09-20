@@ -67,6 +67,29 @@ class Settings(BaseSettings):
     pipeline_track_min_frames: int = 2
     pipeline_track_retry_seconds: float = 0.75
     pipeline_track_min_face_size: int = 32
+    # Portoes de persistencia de evento. Cada evento gravado custa uma linha de
+    # JSONL e DOIS JPEGs, porque `_save_capture` e `_save_face_crop` rodam antes
+    # da escrita. Medido na linha USB, 3,5 meses de uma camera: 491.504 eventos,
+    # ~992 MB de JSONL e ~3,3 GB de imagem.
+    #
+    # Dois desperdicios distintos aparecem nesses dados:
+    #   1. Gente parada. Jose 101.489 eventos e Emanuel 52.579 -- juntos 98% de
+    #      tudo que foi identificado, duas pessoas sentadas na mesa.
+    #   2. Rosto pequeno demais para servir. Dos 334.761 no_match, 84,8% tem
+    #      48-64 px e det_score medíocre: nao sustentam veredito de oclusao nem
+    #      embedding confiavel, e na fase de recorrencia seriam a origem das
+    #      fusoes erradas de identidade.
+    #
+    # ZERO DESLIGA, e zero e o default DE PROPOSITO: o ensaio de campo precisa
+    # gravar tudo, porque e dele que sai o rotulo para calibrar. Alem disso os
+    # numeros acima sao da camera USB, com outra luz e outro enquadramento.
+    # Ligar depois do ensaio, com os cortes que o scene_baseline.py indicar.
+    #
+    # Oclusao nunca passa por estes portoes: sao 1.997 eventos no periodo todo,
+    # alto valor por unidade.
+    event_debounce_seconds: float = 0.0
+    event_unmatched_min_width: int = 0
+    event_unmatched_min_det_score: float = 0.0
     pipeline_warm_up_enabled: bool = True
     pipeline_save_face_crop: bool = True
     pipeline_face_crop_padding: float = 0.25

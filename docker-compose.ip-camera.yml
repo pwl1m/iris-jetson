@@ -74,6 +74,13 @@ services:
       # The engine already serves the browser preview; the in-app JPEG re-encode
       # would only burn CPU on the same frames.
       STREAM_PREVIEW_ENABLED: "false"
+      # Event persistence gates.  Zero disables, and zero is the default on
+      # purpose: the field trial has to record everything, because that run is
+      # what produces the labels to calibrate with.  Turn them on afterwards.
+      # See .env.example and docs/DECISIONS.md D-013.
+      EVENT_DEBOUNCE_SECONDS: "${IRIS_IP_EVENT_DEBOUNCE_SECONDS:-0}"
+      EVENT_UNMATCHED_MIN_WIDTH: "${IRIS_IP_EVENT_UNMATCHED_MIN_WIDTH:-0}"
+      EVENT_UNMATCHED_MIN_DET_SCORE: "${IRIS_IP_EVENT_UNMATCHED_MIN_DET_SCORE:-0}"
       STREAM_MAX_CAPTURE_FILES: "${IRIS_IP_MAX_CAPTURE_FILES:-100000}"
       # 14 days, set by the operation on 2026-09-19; also the purge deadline the
       # recurrence phase must honour for biometrics of people never enrolled.

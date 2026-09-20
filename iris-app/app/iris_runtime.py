@@ -159,6 +159,8 @@ class _CameraWorkerState:
             "faces_in_last_frame": 0,
             "faces_in_frame_peak": 0,
             "faces_materialized": 0,
+            "events_suppressed_debounce": 0,
+            "events_suppressed_quality": 0,
             "materialize_deferred": 0,
             "frames_over_budget": 0,
             "tracks_started": 0,
@@ -233,6 +235,11 @@ class IrisRuntime:
         self._mqtt_client: mqtt.Client | None = None
         self._mqtt_debounce: dict[tuple[str, str, str], float] = {}
         self._mqtt_debounce_lock = threading.Lock()
+        # Debounce de PERSISTENCIA, distinto do de MQTT: aquele so evita
+        # republicar, este evita gravar linha e dois JPEGs. Limitado pelo numero
+        # de sujeitos cadastrados, porque no_match nunca entra aqui.
+        self._event_debounce: dict[tuple[str, str], float] = {}
+        self._event_debounce_lock = threading.Lock()
         self.warm_up_report: dict | None = None
 
     def start(self) -> None:
@@ -669,6 +676,13 @@ class IrisRuntime:
                     "faces_materialized": materializados,
                     "events_written": stats.get("events_written", 0),
                     "max_tracks": self.settings.pipeline_max_faces,
+                },
+                "suppressed": {
+                    "by_debounce": stats.get("events_suppressed_debounce", 0),
+                    "by_quality": stats.get("events_suppressed_quality", 0),
+                    "debounce_seconds": self.settings.event_debounce_seconds,
+                    "unmatched_min_width": self.settings.event_unmatched_min_width,
+                    "unmatched_min_det_score": self.settings.event_unmatched_min_det_score,
                 },
                 "budget": {
                     "materialize_per_frame": self.settings.effective_materialize_budget,
@@ -1389,6 +1403,63 @@ class IrisRuntime:
             self._set_stats(state, last_error=str(exc))
             self.logger.exception("failed to process stream frame camera=%s: %s", camera.camera_id, exc)
 
+    def _event_persistence_gate(
+        self,
+        recognition: dict,
+        detection,
+        camera: CameraConfig,
+        state: _CameraWorkerState,
+    ) -> str | None:
+        """Decide se vale gravar este evento. `None` grava.
+
+        Cada evento persistido custa uma linha de JSONL e dois JPEGs, entao o
+        portao vem ANTES de `_save_capture`, nao depois. Eventos de oclusao nao
+        chegam aqui: o ramo deles retorna antes.
+
+        Dois criterios, deliberadamente diferentes:
+
+        `matched` sai por **debounce** de (camera, sujeito). Uma pessoa parada
+        na frente da camera gerava um evento por track fechado: medido em 3,5
+        meses, 101.489 eventos de uma pessoa so. O centesimo milesimo nao diz
+        nada que o primeiro nao dissesse.
+
+        `no_match` **nunca** sai por debounce, porque o `subject` e o mesmo
+        `None` para todo mundo e uma pessoa suprimiria outra. Sai por qualidade
+        do rosto: 84,8% dos no_match tem 48-64 px e det_score medíocre, nao
+        servem para reconhecer ninguem depois, e na fase de recorrencia seriam a
+        origem das fusoes erradas de identidade.
+
+        Devolve `"debounce"` ou `"quality"` quando suprime, para que o chamador
+        escolha se o track esta encerrado ou se vale tentar de novo.
+        """
+        status = recognition.get("status")
+
+        if status == "matched":
+            window = float(self.settings.event_debounce_seconds)
+            subject = str(recognition.get("subject") or "")
+            if window <= 0 or subject == "":
+                return None
+            key = (camera.camera_id, subject)
+            now = time.monotonic()
+            with self._event_debounce_lock:
+                last = self._event_debounce.get(key)
+                if last is not None and (now - last) < window:
+                    self._increment_stat(state, "events_suppressed_debounce")
+                    return "debounce"
+                self._event_debounce[key] = now
+            return None
+
+        min_width = int(self.settings.event_unmatched_min_width)
+        min_score = float(self.settings.event_unmatched_min_det_score)
+        if min_width <= 0 and min_score <= 0:
+            return None
+
+        width = float(detection.bbox[2]) - float(detection.bbox[0])
+        if width < min_width or float(detection.det_score) < min_score:
+            self._increment_stat(state, "events_suppressed_quality")
+            return "quality"
+        return None
+
     def _observe_census(self, state: _CameraWorkerState, detected: int) -> None:
         """Registra quantos rostos o detector viu neste frame, materializados ou nao."""
         with state.stats_lock:
@@ -1495,6 +1566,16 @@ class IrisRuntime:
             return False
 
         track.last_landmarks = current_landmarks
+
+        suppressed = self._event_persistence_gate(recognition, detection, camera, state)
+        if suppressed == "debounce":
+            # Ja sabemos quem e e acabamos de registrar: o track esta resolvido.
+            return True
+        if suppressed == "quality":
+            # Pode melhorar se a pessoa se aproximar, entao o track continua
+            # elegivel em vez de ser encerrado com um rosto ruim.
+            return False
+
         image_path = self._save_capture(event_id, track.best.frame)
         face_path = self._save_face_crop(event_id, detection.crop) if self.settings.pipeline_save_face_crop else None
         if capture_number % 100 == 0:
