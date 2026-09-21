@@ -69,5 +69,5 @@ O modo USB direto por OpenCV/V4L2 e o `gst_usb_sampled` continuam disponiveis pa
 
 ## Perfil Base Da C930e
 
-Para o Jetson, o baseline atual e capturar a Logitech C930e em `1920x1080` usando `MJPG` na entrada V4L2 e disponibilizar MJPEG pelo go2rtc para o Iris e observabilidade.
+Para o Jetson, o baseline atual com usb é capturar a Logitech C930e em `1920x1080` usando `MJPG` na entrada V4L2 e disponibilizar MJPEG pelo go2rtc para o Iris e observabilidade.
 Neste host, `YUYV` em `1080p` limita a camera a `5 fps`, enquanto `MJPG` preserva `1080p` com margem melhor para operacao futura com duas cameras.
