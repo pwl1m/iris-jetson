@@ -74,6 +74,15 @@ services:
       # The engine already serves the browser preview; the in-app JPEG re-encode
       # would only burn CPU on the same frames.
       STREAM_PREVIEW_ENABLED: "false"
+      # Occlusion verdict floor.  Below it metrics are computed but `suspected`
+      # never turns True.  96 came from the USB camera, where 99.4% of faces
+      # fell below it and the rule effectively never acted.  Measured in the
+      # real IP scene on 2026-09-21, with people walking past: 0% below 48 px,
+      # 51.1% in 48-64, 23.4% in 64-96 and 25.5% above 96.  At 64 the coverage
+      # goes from 25.5% to about 49% of traffic, and the scene supports it --
+      # median det_score 0.837, sharpness 1170 and skin_ratio 0.680, all well
+      # above the USB line, with zero occlusion false positives in 48 events.
+      VISUAL_OCCLUSION_VERDICT_MIN_SIZE: "${IRIS_IP_VISUAL_OCCLUSION_VERDICT_MIN_SIZE:-64}"
       # Event persistence gates.  Zero disables, and zero is the default on
       # purpose: the field trial has to record everything, because that run is
       # what produces the labels to calibrate with.  Turn them on afterwards.

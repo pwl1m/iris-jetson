@@ -109,7 +109,22 @@ class Settings(BaseSettings):
     # nunca fica True. Em rostos de 48-96px a regra atual marcaria 4,84% dos
     # rostos normais como oclusao, medido em 9156 crops reais. Mantido em 96 ate
     # o ensaio com mascara e oculos dar rotulo para recalibrar os limiares.
-    visual_occlusion_verdict_min_size: int = 96
+    # Piso de veredito: abaixo dele as metricas sao calculadas mas `suspected`
+    # nunca fica True. Era 96 px, escolhido quando o unico dado disponivel vinha
+    # da camera USB, onde 99,4% dos rostos ficavam abaixo desse piso e a regra
+    # praticamente nunca agia.
+    #
+    # Medido no cenario IP real em 21/09/2026, com pessoas passando: a
+    # distribuicao mudou. Nenhum rosto abaixo de 48 px, 51,1% entre 48 e 64,
+    # 23,4% entre 64 e 96 e 25,5% acima de 96. Baixar para 64 leva a cobertura
+    # de 25,5% para cerca de 49% do trafego, e o cenario sustenta isso: o
+    # det_score mediano subiu para 0,837, a nitidez para 1.170 e o skin_ratio
+    # para 0,680, todos bem acima da linha USB, com ZERO falso positivo de
+    # oclusao em 48 eventos.
+    #
+    # Nao foi para 48 de uma vez de proposito: a faixa 48-64 e metade do
+    # trafego e ainda nao tem nenhum caso rotulado de oclusao real para validar.
+    visual_occlusion_verdict_min_size: int = 64
     visual_occlusion_dark_pixel_threshold: int = 55
     visual_occlusion_dark_lower_ratio: float = 0.45
     visual_occlusion_dark_top_ratio: float = 0.60

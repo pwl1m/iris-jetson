@@ -95,16 +95,30 @@ class CoverageTests(unittest.TestCase):
         self.assertIn("skin_ratio", result["metrics"])
 
     def test_small_faces_are_measured_but_never_convicted(self):
-        # The current thresholds mark 4.84% of normal 48-96px faces as occluded
-        # (9156 production crops), so the verdict stays above the validated size
-        # while the metrics are collected everywhere.
-        covered = face_like(64, lower=(10, 10, 10), cover_from=0.2)
+        # The floor dropped from 96 to 64 on 2026-09-21, measured in the real IP
+        # scene: 0% of faces below 48 px, 51.1% in 48-64, 23.4% in 64-96, 25.5%
+        # above 96.  The 48-64 band is still half the traffic and has no labelled
+        # occlusion case yet, so it keeps being measured without being convicted.
+        covered = face_like(56, lower=(10, 10, 10), cover_from=0.2)
         result = occlusion.evaluate_visual_occlusion(
             self.settings, detection(covered, det_score=0.60), {}, {"status": "no_match", "similarity": None}
         )
         self.assertGreaterEqual(result["score"], self.settings.visual_occlusion_score_threshold)
         self.assertFalse(result["suspected"])
         self.assertIn("below_verdict_floor", result["signals"])
+
+    def test_the_floor_follows_what_the_scene_supports(self):
+        # 64, nao 96: ver o comentario em settings.py.
+        self.assertEqual(self.settings.visual_occlusion_verdict_min_size, 64)
+
+    def test_a_face_just_above_the_new_floor_can_be_convicted(self):
+        # Esta e a faixa que a mudanca de 96 para 64 passou a cobrir.
+        covered = face_like(72, lower=(10, 10, 10), cover_from=0.2)
+        result = occlusion.evaluate_visual_occlusion(
+            self.settings, detection(covered, det_score=0.60), {}, {"status": "no_match", "similarity": None}
+        )
+        self.assertNotIn("below_verdict_floor", result["signals"])
+        self.assertTrue(result["suspected"])
 
     def test_above_the_verdict_floor_the_score_still_decides(self):
         covered = face_like(128, lower=(10, 10, 10), cover_from=0.2)
