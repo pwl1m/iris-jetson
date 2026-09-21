@@ -22,3 +22,6 @@ docker-compose.camera-runtime.yml
 # vale para os novos. AGENTS.md aponta para docs/DECISIONS.md e
 # docs/MODEL_PLAN.md, que por isso nao existem num clone limpo.
 docs/
+
+# Permissoes locais do Claude Code, nao sao contrato do deploy
+.claude/settings.local.json
