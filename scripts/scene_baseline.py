@@ -105,6 +105,9 @@ def main() -> None:
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--url", default="http://127.0.0.1:8181")
     parser.add_argument("--limit", type=int, default=2000)
+    parser.add_argument("--piso", type=int, default=64,
+                        help="VISUAL_OCCLUSION_VERDICT_MIN_SIZE em uso no deploy "
+                             "(padrao 64, era 96 antes de 21/09/2026)")
     args = parser.parse_args()
 
     linhas = extrair(buscar(args.url, args.limit))
@@ -127,14 +130,29 @@ def main() -> None:
               f"{percentil(valores,95):>9.3f}{referencia:>11.3f}{razao:>8.2f}x")
 
     larguras = coluna(linhas, "largura_bbox")
-    print(f"\ncobertura do veredito de oclusao (piso atual de 96 px):")
-    for baixo, alto in ((0, 48), (48, 64), (64, 96), (96, 160), (160, 10**6)):
+    # O piso e configuravel e ja mudou uma vez (96 -> 64 em 21/09/2026). Fixa-lo
+    # aqui fazia o relatorio contradizer o deploy: com 64 rodando, a linha dizia
+    # 20,2% de cobertura quando a real era 43,8%.
+    piso = args.piso
+    faixas = sorted({0, 48, 64, 96, 160, piso})
+    for i, baixo in enumerate(faixas):
+        alto = faixas[i + 1] if i + 1 < len(faixas) else 10**6
         n = sum(1 for w in larguras if baixo <= w < alto)
         rotulo = f"{baixo}-{alto} px" if alto < 10**6 else f">= {baixo} px"
-        print(f"  {rotulo:<14}{n:>7}  {n/len(larguras)*100:>5.1f}%")
-    acima = sum(1 for w in larguras if w >= 96)
+        marca = "  <- piso" if baixo == piso else ""
+        print(f"  {rotulo:<14}{n:>7}  {n/len(larguras)*100:>5.1f}%{marca}")
+    acima = sum(1 for w in larguras if w >= piso)
     print(f"  -> {acima/len(larguras)*100:.1f}% dos rostos podem receber veredito."
           f"  Na linha USB eram 0,6%.")
+    mediana_largura = percentil(larguras, 50)
+    if mediana_largura < piso:
+        print(f"  ATENCAO: a largura MEDIANA e {mediana_largura:.0f} px, abaixo do")
+        print(f"  piso de {piso}. Mais da metade do trafego nao recebe veredito, e")
+        print(f"  baixar mais o piso nao resolve: {piso} px ja e pouca evidencia.")
+        print(f"  Esta largura e em pixels da FONTE, nao do detector -- entao")
+        print(f"  mexer em FACE_DET_SIZE ou recortar a entrada do detector nao a")
+        print(f"  muda. So otica (aproximar/zoom) ou um stream de resolucao maior.")
+        print(f"  Ver docs/ip-camera/14_CADASTRO_E_LINHA_DE_BASE.md.")
 
     suspeitos = sum(1 for r in linhas if r["suspeito"])
     sob_piso = sum(1 for r in linhas if r["abaixo_do_piso"])
@@ -148,8 +166,8 @@ def main() -> None:
     print("    luz; recalibrar antes de confiar no sinal low_skin_visibility.")
     print("  blur muito abaixo de 740 -> FACE_MIN_BLUR_SCORE=40 fica perto do normal")
     print("    da cena e passa a descartar rosto bom.")
-    print("  se a faixa >= 96 px crescer bem acima de 0,6%, o piso de veredito ja")
-    print("    cobre trafego real e VISUAL_OCCLUSION_VERDICT_MIN_SIZE pode cair.")
+    print("  se a faixa acima do piso crescer bem acima de 0,6%, o piso ja cobre")
+    print("    trafego real e VISUAL_OCCLUSION_VERDICT_MIN_SIZE pode cair de novo.")
 
 
 if __name__ == "__main__":

@@ -97,9 +97,16 @@ services:
       EVENT_UNMATCHED_MIN_WIDTH: "${IRIS_IP_EVENT_UNMATCHED_MIN_WIDTH:-0}"
       EVENT_UNMATCHED_MIN_DET_SCORE: "${IRIS_IP_EVENT_UNMATCHED_MIN_DET_SCORE:-0}"
       STREAM_MAX_CAPTURE_FILES: "${IRIS_IP_MAX_CAPTURE_FILES:-100000}"
-      # 14 days, set by the operation on 2026-09-19; also the purge deadline the
-      # recurrence phase must honour for biometrics of people never enrolled.
-      STREAM_CAPTURE_RETENTION_HOURS: "${IRIS_IP_CAPTURE_RETENTION_HOURS:-336.0}"
+      # 30 days, raised by the operation on 2026-09-21 from the previous 14.
+      # Measured first full working day (2026-09-21, Monday): 476 captures,
+      # 194 MB. Thirty calendar days is about 22 working days, so ~4 GB against
+      # 783 GB free -- disk is not the constraint here, and the recurrence phase
+      # needs a window wider than a single week to see a face come back.
+      # This is ALSO the purge deadline for biometrics of people never enrolled.
+      # Raising it lengthens how long we keep face crops of passers-by who never
+      # consented and were never identified; revisit if that stops being
+      # acceptable, because the disk will never be what forces the decision.
+      STREAM_CAPTURE_RETENTION_HOURS: "${IRIS_IP_CAPTURE_RETENTION_HOURS:-720.0}"
       # Defaults are off so a fresh clone publishes nowhere; the deploy opts in.
       MQTT_PUBLISH_ENABLED: "${IRIS_IP_MQTT_PUBLISH_ENABLED:-false}"
       MQTT_PUBLISH_HOST: "${IRIS_IP_MQTT_PUBLISH_HOST:-}"
