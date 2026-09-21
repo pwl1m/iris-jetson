@@ -83,6 +83,12 @@ services:
       # median det_score 0.837, sharpness 1170 and skin_ratio 0.680, all well
       # above the USB line, with zero occlusion false positives in 48 events.
       VISUAL_OCCLUSION_VERDICT_MIN_SIZE: "${IRIS_IP_VISUAL_OCCLUSION_VERDICT_MIN_SIZE:-64}"
+      # Como o ViewCare deve tocar a URL publicada: mjpeg (default, o que ele ja
+      # sabe fazer), hls ou fmp4.  So mudar para hls/fmp4 depois que o go2rtc
+      # estiver no ar, o H.265 tiver sido validado nos navegadores da operacao e
+      # o patch de render_mode tiver sido aplicado no Onix -- hoje ele devolve
+      # 'mjpeg' fixo em IrisController::getCameraStreamAction.
+      CAMERA_STREAM_RENDER_MODE: "${IRIS_IP_STREAM_RENDER_MODE:-mjpeg}"
       # Event persistence gates.  Zero disables, and zero is the default on
       # purpose: the field trial has to record everything, because that run is
       # what produces the labels to calibrate with.  Turn them on afterwards.
@@ -166,6 +172,24 @@ services:
       retries: 3
       start_period: 30s
 
+  # Transporte de video para o navegador, alternativo ao MJPEG da engine.
+  # Fica atras do profile `preview`: NAO sobe com `up -d`, so com
+  # `--profile preview`.  Nada do que ja foi entregue ao Onix muda enquanto ele
+  # nao subir e CAMERA_STREAM_RENDER_MODE continuar em `mjpeg`.
+  #
+  # Medido em 21/09/2026, com espectador ativo no mesmo canal 101 da engine:
+  # worker 4,900 -> 4,967 FPS, GPU +1,8%, CPU +0,8%, `last_error` nulo.  A
+  # camera serve a segunda sessao sem prejudicar o reconhecimento.
+  #
+  # Entrega o H.265 original sem reencode: 0,38 MB/s por espectador contra
+  # 1,63 MB/s do MJPEG, com zero perda de qualidade em vez da recompressao
+  # JPEG por frame.
+  #
+  # ATENCAO: `GET /api/streams` devolve a credencial RTSP da camera em texto
+  # puro.  O bind default e loopback justamente por isso; abrir para a LAN e
+  # uma decisao consciente.  Proteger a API com senha tambem protege os
+  # endpoints de stream, o que obriga o navegador a autenticar -- ver o
+  # template em iris-video-ip/go2rtc.example.yaml.
   go2rtc:
     profiles: [preview]
     image: alexxit/go2rtc:1.9.14
@@ -173,6 +197,12 @@ services:
     command: [go2rtc, -config, /run/secrets/go2rtc_config]
     secrets: [go2rtc_config]
     networks: [iris-ip]
+    healthcheck:
+      test: [CMD, wget, -qO-, "http://127.0.0.1:1984/api/streams"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
     ports:
       - "${IRIS_IP_PREVIEW_BIND:-127.0.0.1}:${IRIS_IP_PREVIEW_PORT:-1985}:1984"
 

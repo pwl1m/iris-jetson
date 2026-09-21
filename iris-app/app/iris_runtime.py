@@ -15,7 +15,7 @@ import cv2
 import numpy as np
 import paho.mqtt.client as mqtt
 
-from .cameras import configured_cameras, inventory_stream_url
+from .cameras import stream_render_mode, configured_cameras, inventory_stream_url
 from .detector import InsightFaceDetector
 from .face_tracking import FaceTrack, FaceTrackManager, TrackCandidate, select_within_budget
 from .ip_capture import IpEngineCapture
@@ -427,6 +427,9 @@ class IrisRuntime:
         for camera in self.cameras:
             stream = self.stream_status(camera.camera_id)
             healthy = self._stream_is_healthy(stream)
+            render_mode, render_content_type = stream_render_mode(
+                self.settings.camera_stream_render_mode
+            )
             items.append(
                 {
                     "camera_id": camera.camera_id,
@@ -440,6 +443,11 @@ class IrisRuntime:
                     # Consumed internally by the Onix resolver. The browser
                     # still receives only the selected stream_url from /stream.
                     "stream_urls": camera.public_stream_urls,
+                    # Aditivo: o Onix hoje devolve 'mjpeg' fixo e ignora estes
+                    # campos. Quando o patch de render_mode for aplicado la, o
+                    # front passa a escolher o player pelo que o device diz.
+                    "stream_render_mode": render_mode,
+                    "stream_content_type": render_content_type,
                     "input_format": camera.input_format,
                     "width": camera.width,
                     "height": camera.height,

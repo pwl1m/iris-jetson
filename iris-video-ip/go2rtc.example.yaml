@@ -1,8 +1,73 @@
-# Template only. Store the real configuration outside Git with mode 0600.
+# Template do go2rtc para a linha IP. A configuracao real vive FORA do Git,
+# em /etc/iris-ip/go2rtc.yaml com modo 0600, porque contem a credencial RTSP
+# da camera.
+#
+# Por que existe
+# --------------
+# O preview MJPEG da engine (porta 1986) descomprime o H.265 e recomprime cada
+# frame como JPEG q85. Medido em 21/09/2026: 1,63 MB/s por espectador, com
+# perda de qualidade a cada frame.
+#
+# O go2rtc entrega o H.265 ORIGINAL da camera, sem reencode: medido 0,38 MB/s
+# por espectador, 4,3x menos banda e zero perda. A sonda confirmou
+# CODECS="hvc1.1.6.L153.B0" -- passagem direta, nao transcodificacao.
+#
+# Impacto medido no pipeline de inferencia, com espectador ativo:
+#   canal 101 (mesmo da engine): worker 4,900 -> 4,967 FPS, GPU +1,8%, CPU +0,8%
+#   canal 102 (substream):       worker 4,900 -> 4,917 FPS, GPU +1,9%
+# Ou seja, a camera serve a segunda sessao sem prejudicar o reconhecimento, e
+# nao e necessario recorrer ao substream para isso.
+#
+# ATENCAO SOBRE CREDENCIAL
+# ------------------------
+# `GET /api/streams` devolve a URL RTSP COMPLETA, com usuario e senha da camera,
+# em texto puro. Duas posturas possiveis:
+#
+#   a) Sem `username`/`password` abaixo: os endpoints de stream ficam abertos,
+#      igual ao MJPEG da engine hoje -- mas a senha da camera fica exposta a
+#      quem alcancar a porta da API.
+#   b) Com `username`/`password`: /api/streams passa a exigir credencial (401),
+#      MAS os endpoints de stream tambem passam a exigir. Verificado em
+#      21/09/2026 com o go2rtc 1.9.14.
+#
+# Nao existe, nesta versao, opcao de proteger so a API e deixar o stream aberto.
+# Se escolher (a), nao publique a porta alem da LAN de confianca.
+
 api:
   listen: ":1984"
+  # Descomente para a postura (b). Lembre que o navegador passara a precisar
+  # destas credenciais tambem para tocar o stream.
+  # username: REPLACE_IN_PRIVATE_SECRET
+  # password: REPLACE_IN_PRIVATE_SECRET
+
 rtsp:
   listen: ":8554"
+
 streams:
+  # Canal 101 e o principal: H.265 1920x1080 a 20 fps, o mesmo que a engine
+  # consome. Medido: a segunda sessao nao degrada o worker.
+  # O canal 102 (640x360) existe como alternativa de baixa banda, mas perde
+  # muita qualidade e nao e necessario para poupar o pipeline.
   ip_camera: rtsp://REPLACE_IN_PRIVATE_SECRET
-# No FFmpeg transcode by default. Browser H.265 support must be validated.
+
+# Sem transcodificacao por padrao, de proposito: e o que preserva a qualidade
+# e mantem o custo em praticamente zero.
+#
+# RESSALVA DE NAVEGADOR: o H.265 em HLS toca no Safari, tem suporte recente e
+# irregular no Chrome e nao toca no Firefox. Validar com os navegadores que a
+# operacao usa ANTES de trocar o render_mode no ViewCare.
+#
+# Se for necessario cobrir todos os navegadores, transcodificar para H.264 pelo
+# NVENC do Jetson -- que hoje esta completamente ocioso -- custa uma geracao de
+# perda e ainda fica cerca de 5x abaixo da banda do MJPEG. Exemplo:
+#
+# streams:
+#   ip_camera_h264:
+#     - rtsp://REPLACE_IN_PRIVATE_SECRET
+#     - "ffmpeg:ip_camera#video=h264#hardware"
+#
+# Endpoints uteis (todos verificados respondendo 200 em 21/09/2026):
+#   /api/stream.m3u8?src=ip_camera   HLS
+#   /api/stream.mp4?src=ip_camera    fMP4 / MSE
+#   /api/stream.mjpeg?src=ip_camera  MJPEG, como fallback
+#   /api/frame.jpeg?src=ip_camera    snapshot unico

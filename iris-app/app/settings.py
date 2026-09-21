@@ -138,6 +138,10 @@ class Settings(BaseSettings):
     visual_occlusion_min_candidate_similarity: float = 0.35
     camera_1_id: str = "entrada"
     camera_1_stream_url: str = "rtsp://iris-go2rtc:8554/usb_camera"
+    # Dica de como a URL publica deve ser tocada. `mjpeg` mantem exatamente o
+    # comportamento de hoje. `hls` ou `fmp4` valem quando o go2rtc estiver no ar
+    # e o patch de render_mode tiver sido aplicado no Onix.
+    camera_stream_render_mode: str = "mjpeg"
     camera_1_public_stream_url: str = ""
     camera_1_lan_stream_url: str = ""
     camera_1_tailscale_stream_url: str = ""

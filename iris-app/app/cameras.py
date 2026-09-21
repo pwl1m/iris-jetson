@@ -20,6 +20,29 @@ def public_stream_urls(lan_url: str, tailscale_url: str, legacy_url: str) -> dic
     return urls
 
 
+# O ViewCare resolve a URL publica e escolhe o player pelo modo de renderizacao.
+# Hoje `IrisController::getCameraStreamAction` devolve 'mjpeg' fixo, porque era o
+# unico transporte que existia. Publicar a dica aqui e aditivo: o Onix ignora
+# campo desconhecido, e passa a usar quando o patch do lado dele for aplicado.
+RENDER_MODES = {
+    "mjpeg": "multipart/x-mixed-replace",
+    "hls": "application/vnd.apple.mpegurl",
+    "fmp4": "video/mp4",
+}
+
+
+def stream_render_mode(mode: str | None) -> tuple[str, str]:
+    """Modo de renderizacao e content-type da URL publicada.
+
+    Desconhecido ou vazio cai em `mjpeg`, que e o que o ViewCare ja sabe tocar.
+    Nunca levanta: uma configuracao errada nao pode derrubar o inventario.
+    """
+    chave = (mode or "").strip().lower()
+    if chave not in RENDER_MODES:
+        chave = "mjpeg"
+    return chave, RENDER_MODES[chave]
+
+
 def inventory_stream_url(source_kind: str | None, public_stream_url: str | None, source_stream_url: str) -> str:
     """Return only a browser-facing URL for the external camera inventory.
 
