@@ -20,6 +20,9 @@ class CameraConfig:
     serial_number: str | None = None
     model_name: str | None = None
     stable_path: str | None = None
+    # Fracoes (x1, y1, x2, y2), 0.0-1.0. None = sem filtro, censo conta o
+    # frame inteiro. Ver app/roi.py.
+    roi: tuple[float, float, float, float] | None = None
 
 
 @dataclass

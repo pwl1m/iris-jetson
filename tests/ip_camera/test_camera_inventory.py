@@ -18,6 +18,10 @@ def load_cameras():
     settings = types.ModuleType("app.settings")
     settings.Settings = object
     sys.modules["app.settings"] = settings
+    roi_spec = importlib.util.spec_from_file_location("app.roi", ROOT / "iris-app/app/roi.py")
+    roi = importlib.util.module_from_spec(roi_spec)
+    sys.modules["app.roi"] = roi
+    roi_spec.loader.exec_module(roi)
     spec = importlib.util.spec_from_file_location("app.cameras", ROOT / "iris-app/app/cameras.py")
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module

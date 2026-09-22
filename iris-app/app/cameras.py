@@ -1,3 +1,4 @@
+from .roi import parse_roi
 from .schemas import CameraConfig
 from .settings import Settings
 
@@ -75,6 +76,7 @@ def configured_cameras(settings: Settings) -> list[CameraConfig]:
             settings.camera_1_serial,
             settings.camera_1_model,
             settings.camera_1_stable_path,
+            settings.camera_1_roi,
         ),
         (
             settings.camera_2_id,
@@ -89,6 +91,7 @@ def configured_cameras(settings: Settings) -> list[CameraConfig]:
             settings.camera_2_serial,
             settings.camera_2_model,
             settings.camera_2_stable_path,
+            settings.camera_2_roi,
         ),
         (
             settings.camera_3_id,
@@ -103,6 +106,7 @@ def configured_cameras(settings: Settings) -> list[CameraConfig]:
             "",
             "",
             "",
+            settings.camera_3_roi,
         ),
         (
             settings.camera_4_id,
@@ -117,11 +121,12 @@ def configured_cameras(settings: Settings) -> list[CameraConfig]:
             "",
             "",
             "",
+            settings.camera_4_roi,
         ),
     ]
 
     cameras = []
-    for camera_id, stream_url, public_stream_url, lan_stream_url, tailscale_stream_url, enabled, primary, source_kind, device, serial, model, stable_path in specs:
+    for camera_id, stream_url, public_stream_url, lan_stream_url, tailscale_stream_url, enabled, primary, source_kind, device, serial, model, stable_path, roi_spec in specs:
         effective_source_kind = source_kind or ("rtsp" if stream_url else None)
         usb_source = effective_source_kind in {"jetson_gst_usb", "usb", "gst_usb_sampled", "http_mjpeg"}
         effective_device = (device or settings.usb_camera_device) if usb_source else (device or None)
@@ -145,6 +150,7 @@ def configured_cameras(settings: Settings) -> list[CameraConfig]:
                 serial_number=serial or None,
                 model_name=model or None,
                 stable_path=stable_path or None,
+                roi=parse_roi(roi_spec),
             )
         )
     return [camera for camera in cameras if camera.camera_id]

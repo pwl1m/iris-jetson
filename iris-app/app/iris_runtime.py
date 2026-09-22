@@ -21,9 +21,10 @@ from .face_tracking import FaceTrack, FaceTrackManager, TrackCandidate, select_w
 from .ip_capture import IpEngineCapture
 from .pipeline import IrisPipeline
 from .recognizer import NoFaceDetectedError, InsightFaceRecognizer, cosine_similarity, decode_image
+from .roi import bbox_center_inside
 from .schemas import CameraConfig
 from .settings import Settings
-from .storage import FaceStore, find_jsonl_event, read_jsonl_events
+from .storage import FaceStore, FrameCensusStore, find_jsonl_event, read_jsonl_events
 
 
 class _GstUsbCapture:
@@ -197,6 +198,7 @@ class IrisRuntime:
         self.settings = settings
         self.logger = logging.getLogger("iris-app")
         self.store = FaceStore(settings.face_db_path)
+        self.census_store = FrameCensusStore(settings.frame_census_db_path)
         self.recognizer = InsightFaceRecognizer(
             model_name=settings.face_model_name,
             model_root=settings.face_model_root,
@@ -403,6 +405,64 @@ class IrisRuntime:
             "quality": quality,
             "recognition": recognition,
         }
+
+    def _camera_by_id(self, camera_id: str | None) -> CameraConfig | None:
+        if not camera_id:
+            return None
+        for camera in self.cameras:
+            if camera.camera_id == camera_id:
+                return camera
+        return None
+
+    def people_count_bytes(self, payload: bytes, camera_id: str | None = None) -> dict:
+        return self.people_count_image(decode_image(payload), camera_id=camera_id)
+
+    def people_count_image(self, image: np.ndarray, camera_id: str | None = None) -> dict:
+        """Conta rostos distintos numa foto avulsa e persiste o resultado.
+
+        Reaproveita so a deteccao (SCRFD), sem landmarks/embedding -- o mesmo
+        estagio barato que ja roda no censo do worker (~43 ms, plano). Nao
+        reconhece nem cadastra ninguem; e so contagem.
+        """
+        camera = self._camera_by_id(camera_id)
+        roi = camera.roi if camera else None
+        with self._recognizer_lock:
+            candidates = self.pipeline.detect_candidates(
+                image, max_faces=self.settings.effective_detect_max_faces
+            )
+        height, width = image.shape[:2]
+        boxes = []
+        face_count = 0
+        for candidate in candidates:
+            bbox = [float(value) for value in candidate["bbox"]]
+            inside = roi is None or bbox_center_inside(bbox, roi, width, height)
+            if inside:
+                face_count += 1
+            boxes.append({
+                "bbox": bbox,
+                "det_score": float(candidate["det_score"]),
+                "inside_roi": inside if roi is not None else None,
+            })
+        captured_at = self._now()
+        census_id = self.census_store.record(
+            camera_id=camera_id or "unspecified",
+            captured_at=captured_at,
+            face_count=face_count,
+            roi_applied=roi is not None,
+            source="upload",
+        )
+        return {
+            "census_id": census_id,
+            "camera_id": camera_id,
+            "captured_at": captured_at,
+            "face_count": face_count,
+            "faces_detected_total": len(candidates),
+            "roi_applied": roi is not None,
+            "boxes": boxes,
+        }
+
+    def frame_census(self, limit: int = 20, camera_id: str | None = None, since: int | None = None) -> dict:
+        return {"census": self.census_store.list_recent(limit=limit, camera_id=camera_id, since=since)}
 
     def detector_status(self) -> dict:
         return {
@@ -1359,6 +1419,7 @@ class IrisRuntime:
                     frame, max_faces=self.settings.effective_detect_max_faces
                 )
             self._observe_census(state, len(candidates))
+            self._record_frame_census(camera, candidates, frame, captured_at, capture_number)
             if not candidates:
                 state.tracker.expire(time.monotonic())
                 self._increment_stat(state, "no_face_detected")
@@ -1475,6 +1536,45 @@ class IrisRuntime:
             state.stats["faces_in_last_frame"] = detected
             if detected > state.stats["faces_in_frame_peak"]:
                 state.stats["faces_in_frame_peak"] = detected
+
+    def _record_frame_census(
+        self,
+        camera: CameraConfig,
+        candidates: list[dict],
+        frame: np.ndarray,
+        captured_at: str,
+        capture_number: int,
+    ) -> None:
+        """Persiste o censo deste frame em `frame_census`.
+
+        Roda a ROI da camera (se houver) so aqui -- o tracking, o
+        reconhecimento e a oclusao logo abaixo continuam recebendo TODOS os
+        `candidates`, sem filtro nenhum. Ligar uma ROI muda o que o contador
+        novo reporta, nunca o que o pipeline ja calibrado faz.
+        """
+        roi = camera.roi
+        if roi is not None:
+            height, width = frame.shape[:2]
+            face_count = sum(
+                1 for candidate in candidates
+                if bbox_center_inside(candidate["bbox"], roi, width, height)
+            )
+        else:
+            face_count = len(candidates)
+        try:
+            self.census_store.record(
+                camera_id=camera.camera_id,
+                captured_at=captured_at,
+                face_count=face_count,
+                capture_number=capture_number,
+                roi_applied=roi is not None,
+                source="worker",
+            )
+        except Exception as exc:
+            # O censo e observabilidade, nao contrato: uma falha de escrita
+            # aqui nao pode derrubar o frame que ja processou reconhecimento
+            # e oclusao normalmente.
+            self.logger.warning("failed to persist frame census camera=%s: %s", camera.camera_id, exc)
 
     def _within_budget(self, ready_tracks: list[FaceTrack], state: _CameraWorkerState) -> list[FaceTrack]:
         """Materializa ate `pipeline_materialize_budget` tracks neste frame.

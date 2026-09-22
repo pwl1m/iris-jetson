@@ -19,6 +19,11 @@ class Settings(BaseSettings):
     occlusion_log_path: str = "/data/events/occlusions.jsonl"
     capture_dir: str = "/data/events/captures"
     face_crop_dir: str = "/data/events/faces"
+    # Contagem de pessoas por frame (censo persistido, distinto do /crowd em
+    # memoria). Arquivo proprio, fora de faces.sqlite3, porque nao e dado
+    # biometrico: e so "quantos rostos apareceram", sem embedding nem
+    # identidade. Ver PEOPLE_COUNT_API.md (raiz de iris-app/).
+    frame_census_db_path: str = "/data/events/census.sqlite3"
     camera_name: str = "entrada"
     stream_source_kind: str = "rtsp"
     stream_url: str = "rtsp://iris-go2rtc:8554/usb_camera"
@@ -151,6 +156,13 @@ class Settings(BaseSettings):
     camera_1_serial: str = ""
     camera_1_model: str = ""
     camera_1_stable_path: str = ""
+    # Zona que o censo de pessoas conta, em fracoes de 0 a 1 ("x1,y1,x2,y2"),
+    # nunca em pixel absoluto -- pixel absoluto quebraria de novo na proxima
+    # troca de resolucao da camera (ja aconteceu uma vez, D-019). Vazio
+    # desliga o filtro e o censo conta o frame inteiro, que e o default.
+    # Filtra so `/people-count` e `frame_census`; recognition/tracking/oclusao
+    # continuam vendo o frame inteiro sem mudanca de comportamento.
+    camera_1_roi: str = ""
     camera_2_id: str = "entrada_2"
     camera_2_stream_url: str = ""
     camera_2_public_stream_url: str = ""
@@ -162,6 +174,7 @@ class Settings(BaseSettings):
     camera_2_serial: str = ""
     camera_2_model: str = ""
     camera_2_stable_path: str = ""
+    camera_2_roi: str = ""
     camera_3_id: str = "entrada_3"
     camera_3_stream_url: str = ""
     camera_3_public_stream_url: str = ""
@@ -170,6 +183,7 @@ class Settings(BaseSettings):
     camera_3_enabled: bool = False
     camera_3_source_kind: str = ""
     camera_3_device: str = ""
+    camera_3_roi: str = ""
     camera_4_id: str = "entrada_4"
     camera_4_stream_url: str = ""
     camera_4_public_stream_url: str = ""
@@ -178,6 +192,7 @@ class Settings(BaseSettings):
     camera_4_enabled: bool = False
     camera_4_source_kind: str = ""
     camera_4_device: str = ""
+    camera_4_roi: str = ""
     usb_camera_device: str = "/dev/video0"
     usb_camera_input_format: str = "mjpeg"
     usb_camera_width: int = 1920

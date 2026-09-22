@@ -900,6 +900,30 @@ def crowd(camera_id: str | None = None) -> dict:
     return runtime.crowd_status(camera_id)
 
 
+@app.get("/people-count")
+def people_count_history(limit: int = 20, camera_id: str | None = None, since: int | None = None) -> dict:
+    """Historico persistido do censo de rostos por frame.
+
+    Distinto de `/crowd`: aqui cada linha sobrevive a um restart do worker.
+    `since` e o `id` da ultima linha ja vista (paginacao incremental).
+    """
+    return runtime.frame_census(limit=limit, camera_id=camera_id, since=since)
+
+
+@app.post("/people-count")
+async def people_count(file: UploadFile = File(...), camera_id: str | None = None) -> dict:
+    """Conta rostos numa foto avulsa (upload) e grava uma linha no censo.
+
+    `camera_id` e opcional; se informado e a camera tiver ROI configurada
+    (`CAMERA_n_ROI`), `face_count` reflete so a zona e cada item de `boxes`
+    ganha `inside_roi`. Sem `camera_id`, conta o frame inteiro.
+    """
+    try:
+        return runtime.people_count_bytes(await file.read(), camera_id=camera_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @app.get("/stream/status")
 def stream_status() -> dict:
     return runtime.stream_status()

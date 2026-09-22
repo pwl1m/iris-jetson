@@ -182,6 +182,98 @@ class FaceStore:
             yield row["subject"], np.asarray(json.loads(row["embedding"]), dtype=np.float32), row["source"]
 
 
+class FrameCensusStore:
+    """Contagem de rostos por frame, persistida -- distinta de `/crowd`.
+
+    `/crowd` le contadores em memoria que zeram a cada restart do worker.
+    Esta tabela e o historico consultavel: uma linha por frame processado
+    pelo worker (`source="worker"`) mais uma linha por chamada avulsa de
+    `/people-count` (`source="upload"`). Nao guarda embedding nem identidade
+    -- so "quantos rostos, em que camera, em que instante" -- por isso vive
+    num arquivo proprio, fora de `faces.sqlite3`.
+    """
+
+    def __init__(self, db_path: str):
+        self.db_path = Path(db_path)
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._init_db()
+
+    def _connect(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(self.db_path, check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    def _init_db(self) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS frame_census (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    camera_id TEXT NOT NULL,
+                    captured_at TEXT NOT NULL,
+                    capture_number INTEGER,
+                    face_count INTEGER NOT NULL,
+                    roi_applied INTEGER NOT NULL DEFAULT 0,
+                    source TEXT NOT NULL DEFAULT 'worker',
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_frame_census_camera_time ON frame_census(camera_id, id)")
+
+    def record(
+        self,
+        camera_id: str,
+        captured_at: str,
+        face_count: int,
+        *,
+        capture_number: int | None = None,
+        roi_applied: bool = False,
+        source: str = "worker",
+    ) -> int:
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO frame_census(camera_id, captured_at, capture_number, face_count, roi_applied, source)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (camera_id, captured_at, capture_number, int(face_count), int(bool(roi_applied)), source),
+            )
+            return int(cursor.lastrowid)
+
+    def list_recent(
+        self,
+        limit: int = 20,
+        *,
+        camera_id: str | None = None,
+        since: int | None = None,
+    ) -> list[dict]:
+        """Historico do censo.
+
+        Sem `since`: as `limit` linhas mais recentes, mais nova primeiro --
+        mesma convencao de `read_jsonl_events` sem cursor. Com `since` (o
+        `id` da ultima linha ja vista): so linhas mais novas que o cursor,
+        em ordem cronologica, para paginacao incremental como `/events`.
+        """
+        limit = max(1, min(int(limit), 500))
+        clauses = []
+        params: list[object] = []
+        if camera_id:
+            clauses.append("camera_id = ?")
+            params.append(camera_id)
+        if since is not None:
+            clauses.append("id > ?")
+            params.append(int(since))
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        order = "ASC" if since is not None else "DESC"
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"SELECT * FROM frame_census {where} ORDER BY id {order} LIMIT ?",
+                (*params, limit),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+
 def read_jsonl_events(
     path: Path,
     limit: int,

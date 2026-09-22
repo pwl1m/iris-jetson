@@ -47,6 +47,27 @@ Aplicacao principal da Fase 1: API FastAPI, cadastro facial, reconhecimento e wo
 - `GET /occlusions/{event_id}`
 - `GET /occlusions/{event_id}/frame.jpg`
 - `GET /occlusions/{event_id}/face.jpg`
+- `GET /crowd?camera_id=entrada` (censo em memoria, zera a cada restart)
+- `GET /people-count?limit=20&camera_id=entrada&since=<id>` (censo persistido)
+- `POST /people-count` (`file` em multipart, `camera_id` opcional na query)
+
+## Censo de pessoas (people-count)
+
+Contador de rostos por foto/frame, **persistido** — distinto de `/crowd`, que
+so mantem contadores em memoria e zera a cada restart do worker. Reaproveita
+so a deteccao (SCRFD) ja usada pelo pipeline, sem landmarks/embedding: nao
+reconhece nem cadastra ninguem, so conta. Detalhe completo, contrato de
+dado e passo a passo de integracao em `PEOPLE_COUNT_API.md`, neste diretorio.
+
+Resumo rapido:
+
+- `POST /people-count` aceita qualquer foto avulsa (inclusive uma ja
+  capturada pelo worker) e devolve `face_count` + as `boxes` detectadas.
+- `GET /people-count` lista o historico gravado, com paginacao incremental
+  por `since` (mesmo padrao de `/events`).
+- Cada camera pode ter uma ROI (`CAMERA_n_ROI`, fracao `x1,y1,x2,y2` de 0 a
+  1) que filtra **so este contador** — reconhecimento, tracking e oclusao
+  continuam vendo o frame inteiro, sem mudanca de comportamento.
 
 ## Dashboard
 
