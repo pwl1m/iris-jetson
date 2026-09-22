@@ -131,6 +131,13 @@ facial é compartilhada pelo Iris. Validar duas câmeras antes de habilitar uma
 terceira. Preferir controlador USB distinto: a C930e atual está em um hub USB
 2.0 de 480 Mbps.
 
+**Identificar a câmera por caminho estável, não por índice.** Com duas câmeras
+USB, `/dev/video0`/`/dev/video1` podem trocar de número entre um boot e outro,
+ou quando uma delas é desconectada e reconectada — o Linux não garante ordem
+fixa. Usar `/dev/v4l/by-id/...` (ou `/dev/v4l/by-path/...`) no mapeamento V4L2
+do go2rtc evita que a segunda câmera assuma o device da primeira depois de um
+reboot silenciosamente.
+
 ## Modos de ingestão
 
 O push HTTP do Iris é opcional. Com `ONIX_PUSH_ENABLED=false`, o read model é
