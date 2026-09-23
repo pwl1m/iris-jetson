@@ -73,8 +73,10 @@ Segredos opcionais:
 - O cliente VLM assincrono esta implementado e coberto por testes, mas
   `IRIS_IP_VLM_ENRICHMENT_ENABLED=false` permanece obrigatorio ate o benchmark
   conjunto de memoria/GPU com o Gemma.
-- O backend VLM roda no projeto `eclusa-tailgating`; o Iris compartilha apenas a
-  rede Docker e seu volume de eventos em modo somente leitura no orquestrador.
+- O backend VLM roda no repo/pasta `vlm-backend` (extraido do `eclusa-tailgating`
+  em 23/09/2026 para nao acoplar o backend compartilhado ao ciclo de vida de um
+  produto especifico); o Iris compartilha apenas a rede Docker e seu volume de
+  eventos em modo somente leitura no orquestrador.
 - O callback generico de anotacao foi validado com receptor de teste. O endpoint
   real de ingestao VLM no ViewCare/Onix ainda nao existe.
 
