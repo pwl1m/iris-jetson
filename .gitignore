@@ -17,10 +17,7 @@ runtime-libs/
 .camera-runtime.env
 docker-compose.camera-runtime.yml
 
-# Documentacao de trabalho fica local por decisao da operacao (19/09/2026).
-# Os arquivos ja versionados antes desta data continuam versionados; o ignore
-# vale para os novos. AGENTS.md aponta para docs/DECISIONS.md e
-# docs/MODEL_PLAN.md, que por isso nao existem num clone limpo.
+# Documentacao de trabalho fica somente local por decisao da operacao.
 docs/
 
 # Permissoes locais do Claude Code, nao sao contrato do deploy

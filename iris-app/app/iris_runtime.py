@@ -25,6 +25,7 @@ from .roi import bbox_center_inside
 from .schemas import CameraConfig
 from .settings import Settings
 from .storage import FaceStore, FrameCensusStore, find_jsonl_event, read_jsonl_events
+from .vlm_client import build_vlm_job, submit_vlm_job
 
 
 class _GstUsbCapture:
@@ -180,6 +181,9 @@ class _CameraWorkerState:
             "mqtt_sent": 0,
             "mqtt_errors": 0,
             "last_mqtt_error": None,
+            "vlm_submitted": 0,
+            "vlm_errors": 0,
+            "last_vlm_error": None,
             "stream_url": camera.stream_url,
             "stream_source_kind": camera.source_kind,
             "camera": camera.camera_id,
@@ -235,6 +239,9 @@ class IrisRuntime:
         self._mqtt_thread: threading.Thread | None = None
         self._mqtt_queue: queue.Queue[dict] = queue.Queue(maxsize=max(1, settings.mqtt_publish_queue_size))
         self._mqtt_client: mqtt.Client | None = None
+        self._vlm_stop_event = threading.Event()
+        self._vlm_thread: threading.Thread | None = None
+        self._vlm_queue: queue.Queue[dict] = queue.Queue(maxsize=max(1, settings.vlm_queue_size))
         self._mqtt_debounce: dict[tuple[str, str, str], float] = {}
         self._mqtt_debounce_lock = threading.Lock()
         # Debounce de PERSISTENCIA, distinto do de MQTT: aquele so evita
@@ -251,6 +258,7 @@ class IrisRuntime:
         )
         self._start_push_worker()
         self._start_mqtt_worker()
+        self._start_vlm_worker()
         self._warm_up_models()
         if self.settings.stream_worker_enabled:
             self.start_stream()
@@ -259,6 +267,7 @@ class IrisRuntime:
         self.stop_stream()
         self._stop_push_worker()
         self._stop_mqtt_worker()
+        self._stop_vlm_worker()
 
     def start_stream(self) -> dict:
         for camera in self.cameras:
@@ -1274,6 +1283,75 @@ class IrisRuntime:
             self._increment_stat(state, "mqtt_errors")
             self._set_stats(state, last_mqtt_error="fila MQTT cheia")
 
+    def _start_vlm_worker(self) -> None:
+        if not self.settings.vlm_enrichment_enabled:
+            return
+        if not self.settings.vlm_orchestrator_url.strip():
+            self.logger.warning("VLM enrichment enabled without VLM_ORCHESTRATOR_URL")
+            return
+        if self._vlm_thread and self._vlm_thread.is_alive():
+            return
+        self._vlm_stop_event.clear()
+        self._vlm_thread = threading.Thread(target=self._vlm_loop, name="vlm-submit-worker", daemon=True)
+        self._vlm_thread.start()
+
+    def _stop_vlm_worker(self) -> None:
+        self._vlm_stop_event.set()
+        if self._vlm_thread:
+            self._vlm_thread.join(timeout=3)
+
+    def _enqueue_vlm(self, kind: str, event: dict) -> None:
+        if not self.settings.vlm_enrichment_enabled:
+            return
+        state = self._state_for_event(event)
+        try:
+            self._vlm_queue.put_nowait({"kind": kind, "event": event})
+        except queue.Full:
+            self._increment_stat(state, "vlm_errors")
+            self._set_stats(state, last_vlm_error="fila de submissao VLM cheia")
+
+    def _vlm_loop(self) -> None:
+        while not self._vlm_stop_event.is_set():
+            try:
+                item = self._vlm_queue.get(timeout=0.5)
+            except queue.Empty:
+                continue
+            try:
+                self._submit_vlm(item["kind"], item["event"])
+            finally:
+                self._vlm_queue.task_done()
+
+    def _submit_vlm(self, kind: str, event: dict) -> None:
+        state = self._state_for_event(event)
+        attempts = max(1, int(self.settings.vlm_submit_max_retries))
+        try:
+            payload = build_vlm_job(self.settings, kind, event)
+        except Exception as exc:
+            self._increment_stat(state, "vlm_errors")
+            self._set_stats(state, last_vlm_error=str(exc))
+            self.logger.warning("failed to build VLM job event=%s: %s", event.get("event_id"), exc)
+            return
+
+        for attempt in range(1, attempts + 1):
+            try:
+                response = submit_vlm_job(self.settings, payload)
+                self._increment_stat(state, "vlm_submitted")
+                self._set_stats(state, last_vlm_error=None)
+                self.logger.info(
+                    "VLM job submitted event=%s job=%s created=%s",
+                    event.get("event_id"),
+                    response["job"]["id"],
+                    response.get("created"),
+                )
+                return
+            except Exception as exc:
+                if attempt >= attempts:
+                    self._increment_stat(state, "vlm_errors")
+                    self._set_stats(state, last_vlm_error=str(exc))
+                    self.logger.warning("failed to submit VLM job event=%s: %s", event.get("event_id"), exc)
+                    return
+                time.sleep(max(0.1, float(self.settings.vlm_submit_retry_delay_seconds)))
+
     def _mqtt_loop(self) -> None:
         while not self._mqtt_stop_event.is_set():
             try:
@@ -1662,6 +1740,7 @@ class IrisRuntime:
                 },
             }
             self._write_occlusion(occlusion_event)
+            self._enqueue_vlm("occlusion", occlusion_event)
             self._enqueue_onix_push("occlusion", occlusion_event)
             self._enqueue_mqtt_publish("occlusion", occlusion_event)
             self._increment_stat(state, "occlusions_written")
@@ -1706,6 +1785,7 @@ class IrisRuntime:
             "recognition": recognition,
         }
         self._write_event(event)
+        self._enqueue_vlm("event", event)
         self._enqueue_onix_push("event", event)
         self._enqueue_mqtt_publish("event", event)
         state.latest_event = event

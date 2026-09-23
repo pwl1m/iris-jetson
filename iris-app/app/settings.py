@@ -218,6 +218,23 @@ class Settings(BaseSettings):
     mqtt_publish_queue_size: int = 500
     mqtt_publish_keepalive_seconds: int = 30
     mqtt_debounce_seconds: float = 30.0
+    # Enriquecimento visual opcional. A inferencia nunca roda na thread de
+    # reconhecimento: esta fila apenas registra o evento no orquestrador local.
+    vlm_enrichment_enabled: bool = False
+    vlm_orchestrator_url: str = "http://eclusa-vlm-orchestrator:18100/v1/jobs"
+    vlm_api_token: str = ""
+    vlm_api_token_file: str = ""
+    vlm_prompt_id: str = "iris-scene-v1"
+    vlm_priority: int = 100
+    vlm_queue_size: int = 200
+    vlm_submit_timeout_seconds: float = 2.0
+    vlm_submit_max_retries: int = 3
+    vlm_submit_retry_delay_seconds: float = 1.0
+    vlm_job_max_attempts: int = 3
+    # Mesmo volume de /data/events, montado read-only neste caminho no
+    # orquestrador. Assim nenhuma imagem precisa ser copiada ou exposta em HTTP.
+    vlm_shared_event_root: str = "/sources/iris-events"
+    vlm_callback_url: str = ""
     api_allowed_client_ips: str = ""
 
     @property
