@@ -187,6 +187,29 @@ mas nao constituem uma fila duravel: indisponibilidade prolongada, fila cheia ou
 reinicio podem descartar mensagens. A reconciliacao por `GET /events` continua
 necessaria quando entrega garantida for requisito.
 
+## Enriquecimento VLM opcional
+
+O Iris possui um terceiro canal assincrono, desligado por padrao, para registrar
+eventos ja persistidos no `eclusa-vlm-orchestrator`:
+
+```dotenv
+IRIS_IP_VLM_ENRICHMENT_ENABLED=false
+IRIS_IP_VLM_ORCHESTRATOR_URL=http://eclusa-vlm-orchestrator:18100/v1/jobs
+```
+
+A thread de reconhecimento apenas coloca `event` ou `occlusion` numa fila local
+limitada. O worker traduz `/data/events/...` para o caminho read-only
+`/sources/iris-events/...`, envia uma chave idempotente e retorna; a inferencia
+Gemma acontece fora do processo Iris. Os contadores `vlm_submitted`,
+`vlm_errors` e `last_vlm_error` aparecem no status de cada camera.
+
+Esse canal nao altera `recognition`, qualidade, oclusao, MQTT ou push Onix. O
+nome reconhecido fica apenas nos metadados de correlacao e nao entra no prompt
+visual. Depois que o orquestrador aceita o job, sua fila SQLite e duravel; a
+fila de submissao anterior continua em memoria. Nao habilitar em operacao antes
+do benchmark Iris + Gemma no Orin 8 GB. Contrato completo em
+[`../docs/VLM_ENRICHMENT.md`](../docs/VLM_ENRICHMENT.md).
+
 ## Cameras
 
 O runtime processa todas as cameras habilitadas (`CAMERA_1_*` a `CAMERA_4_*`) com um worker independente por camera. A inferencia compartilha o modelo facial sob lock para evitar duplicacao de memoria e concorrencia insegura no Jetson. A API `/cameras` retorna status individual, e previews podem ser consultados em `/cameras/{camera_id}/preview/latest.jpg` ou `/cameras/{camera_id}/preview/stream.mjpg`.
