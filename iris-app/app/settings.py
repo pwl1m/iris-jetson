@@ -230,7 +230,9 @@ class Settings(BaseSettings):
     vlm_submit_timeout_seconds: float = 2.0
     vlm_submit_max_retries: int = 3
     vlm_submit_retry_delay_seconds: float = 1.0
-    vlm_job_max_attempts: int = 3
+    # 8 tentativas com backoff exponencial (1,2,4,8,16,32,60,60s) cobrem um
+    # restart do gemma-server sob mem_limit (unless-stopped) sem perder o job.
+    vlm_job_max_attempts: int = 8
     # Mesmo volume de /data/events, montado read-only neste caminho no
     # orquestrador. Assim nenhuma imagem precisa ser copiada ou exposta em HTTP.
     vlm_shared_event_root: str = "/sources/iris-events"
